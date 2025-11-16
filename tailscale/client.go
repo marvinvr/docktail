@@ -73,19 +73,21 @@ func (c *Client) BuildConfig(services []*apptypes.ContainerService) *apptypes.Ta
 func (c *Client) GetCurrentConfig(ctx context.Context) (*apptypes.TailscaleServiceConfig, error) {
 	cmd := exec.CommandContext(ctx, "tailscale", "serve", "get-config", "--all", "--json")
 
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		stderr := string(output)
 		// Empty config is not an error
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			stderr := string(exitErr.Stderr)
-			if strings.Contains(stderr, "no config") || strings.Contains(stderr, "not found") {
-				return &apptypes.TailscaleServiceConfig{
-					Version:  "0.0.1",
-					Services: make(map[string]apptypes.ServiceDefinition),
-				}, nil
-			}
+		if strings.Contains(stderr, "no config") ||
+		   strings.Contains(stderr, "not found") ||
+		   strings.Contains(stderr, "nothing to show") ||
+		   strings.Contains(stderr, "no serve config") {
+			log.Debug().Msg("No existing Tailscale serve config found, starting fresh")
+			return &apptypes.TailscaleServiceConfig{
+				Version:  "0.0.1",
+				Services: make(map[string]apptypes.ServiceDefinition),
+			}, nil
 		}
-		return nil, fmt.Errorf("failed to get tailscale config: %w", err)
+		return nil, fmt.Errorf("failed to get tailscale config: %w (output: %s)", err, stderr)
 	}
 
 	var config apptypes.TailscaleServiceConfig

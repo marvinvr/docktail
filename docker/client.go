@@ -124,22 +124,46 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		return nil, fmt.Errorf("failed to inspect container: %w", err)
 	}
 
-	// Get IP address from specified network or default bridge
+	// Get IP address from specified network or auto-detect
 	networkName := labels[apptypes.LabelNetwork]
-	if networkName == "" {
-		networkName = "bridge"
-	}
-
 	var ipAddress string
-	if network, ok := inspect.NetworkSettings.Networks[networkName]; ok {
-		ipAddress = network.IPAddress
-	}
 
-	if ipAddress == "" {
-		return nil, fmt.Errorf("no IP address found on network: %s", networkName)
+	if networkName != "" {
+		// Use specified network
+		if network, ok := inspect.NetworkSettings.Networks[networkName]; ok {
+			ipAddress = network.IPAddress
+		}
+		if ipAddress == "" {
+			return nil, fmt.Errorf("no IP address found on specified network: %s", networkName)
+		}
+	} else {
+		// Auto-detect: try bridge first, then use first available network
+		if network, ok := inspect.NetworkSettings.Networks["bridge"]; ok && network.IPAddress != "" {
+			ipAddress = network.IPAddress
+			networkName = "bridge"
+		} else {
+			// Use first available network with an IP address
+			for name, network := range inspect.NetworkSettings.Networks {
+				if network.IPAddress != "" {
+					ipAddress = network.IPAddress
+					networkName = name
+					break
+				}
+			}
+		}
+
+		if ipAddress == "" {
+			return nil, fmt.Errorf("no IP address found on any network")
+		}
 	}
 
 	containerName := strings.TrimPrefix(inspect.Name, "/")
+
+	log.Debug().
+		Str("container", containerName).
+		Str("network", networkName).
+		Str("ip", ipAddress).
+		Msg("Detected container network configuration")
 
 	return &apptypes.ContainerService{
 		ContainerID:   containerID[:12],
