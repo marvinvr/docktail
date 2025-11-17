@@ -144,15 +144,15 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 	log.Info().
 		Strs("desired_services", desiredServices).
 		Strs("current_services", currentServices).
-		Msg("Configuration changed, applying FULL configuration for ALL services")
+		Msg("Configuration changed, applying full configuration for all services")
 
-	// Apply the COMPLETE desired configuration using --all flag
+	// Apply the complete desired configuration using --all flag
 	// This replaces the entire Tailscale serve configuration
 	if err := r.tailscaleClient.ApplyConfig(ctx, desiredConfig); err != nil {
 		return fmt.Errorf("failed to apply config: %w", err)
 	}
 
-	// Advertise ALL services in the configuration
+	// Advertise all services in the configuration
 	if err := r.tailscaleClient.AdvertiseServices(ctx, desiredConfig); err != nil {
 		return fmt.Errorf("failed to advertise services: %w", err)
 	}

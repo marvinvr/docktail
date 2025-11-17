@@ -1,8 +1,8 @@
 # DockTail
 
-**Unleash every container in your homelab as a Tailscale Service**
+**Unleash your Containers as Tailscale Services**
 
-Automatically expose Docker containers as Tailscale Services using label-based configuration - zero-config service mesh for your homelab.
+Automatically expose Docker containers as Tailscale Services using label-based configuration - zero-config service mesh for your dockerized services.
 
 ## Quick Start - Port Publishing Requirements
 
@@ -51,7 +51,7 @@ Manually configuring Tailscale Services for Docker containers requires:
 5. Cleaning up when containers stop
 6. Updating configs when containers restart with new IPs
 
-This is tedious, error-prone, and doesn't scale well for homelabs with many services.
+This is tedious, error-prone, and doesn't scale well when managing many services.
 
 ## The Solution
 
