@@ -4,6 +4,47 @@
 
 Automatically expose Docker containers as Tailscale Services using label-based configuration - zero-config service mesh for your dockerized services.
 
+
+```
+ ┌────────────────────────────────────────────────────────┐
+ │                     Docker Host                        │
+ │                                                        │
+ │  ┌──────────────────┐         ┌──────────────────┐     │
+ │  │     DockTail     │────────▶│ Tailscale Daemon │     │
+ │  │   (Container)    │  CLI    │   (Host Process) │     │
+ │  └────────┬─────────┘         └────────┬─────────┘     │
+ │           │                            │               │
+ │           │ Docker Socket              │ Proxies to    │
+ │           │ Monitoring                 │ localhost     │
+ │           ▼                            ▼               │
+ │  ┌──────────────────┐         ┌──────────────────┐     │
+ │  │   App Container  │◀────────│  localhost:9080  │     │
+ │  │   Port 80        │  Mapped │  localhost:9081  │     │
+ │  │  ports: 9080:80  │◀────────│                  │     │
+ │  └──────────────────┘         └──────────────────┘     │
+ │                                                        │
+ └────────────────────────────────────────────────────────┘
+                          │
+                          │ Tailscale Network
+                          ▼
+               ┌─────────────────────┐
+               │  Tailnet Clients    │
+               │  Access services:   │
+               │  web.tailnet.ts.net │
+               └─────────────────────┘
+```
+
+## Features
+
+- [x] Automatically discover and advertise Docker containers as Tailscale services
+- [x] Supports HTTP, HTTPS and TCP protocols
+- [x] Zero-config service mesh for your dockerized services
+- [x] Automatically clean up Tailscale service configurations on container stop
+- [x] Runs entirely in a **stateless Docker container**
+- [ ] Support Tailscale HTTPS
+- [ ] Add Tailscale Funnel Support
+- [ ] More? => Create an Issue :)
+
 ## Quick Start
 
 ### Admin Console Setup
@@ -36,13 +77,6 @@ Before installing the autopilot, configure your Tailscale admin console at https
 
 See [Tailscale Services documentation](https://tailscale.com/kb/1552/tailscale-services) for detailed setup instructions.
 
-### Prerequisites
-
-1. Tailscale installed and authenticated on your Docker host
-2. Host must have a tag-based identity (not user-based)
-3. Docker daemon running with API socket exposed
-4. Services created in Tailscale admin console (see above)
-
 ### Installation
 
 #### Option 1: Docker Compose
@@ -65,11 +99,6 @@ services:
       - RECONCILE_INTERVAL=60s
 ```
 
-Start the service:
-```bash
-docker compose up -d
-```
-
 #### Option 2: Docker Run
 
 ```bash
@@ -81,18 +110,6 @@ docker run -d \
   -e LOG_LEVEL=info \
   -e RECONCILE_INTERVAL=60s \
   ghcr.io/marvinvr/docktail:latest
-```
-
-#### Verify Installation
-
-Check the logs:
-```bash
-docker logs -f docktail
-```
-
-Verify services are advertised:
-```bash
-tailscale serve status --json
 ```
 
 ### Usage
@@ -174,38 +191,6 @@ services:
 5. **Configuration Application**: Executes Tailscale CLI commands to apply config and advertise services
 6. **Stateless Operation**: Periodically reconciles state by querying Docker and Tailscale APIs
 
-## Architecture
-
-```
-┌────────────────────────────────────────────────────────┐
-│                     Docker Host                        │
-│                                                        │
-│  ┌──────────────────┐         ┌──────────────────┐     │
-│  │     DockTail     │────────▶│ Tailscale Daemon │     │
-│  │   (Container)    │  CLI    │   (Host Process) │     │
-│  └────────┬─────────┘         └────────┬─────────┘     │
-│           │                            │               │
-│           │ Docker Socket              │ Proxies to    │
-│           │ Monitoring                 │ localhost     │
-│           ▼                            ▼               │
-│  ┌──────────────────┐         ┌──────────────────┐     │
-│  │   App Container  │◀────────│  localhost:9080  │     │
-│  │   Port 80        │  Mapped │  localhost:9081  │     │
-│  │  ports: 9080:80  │◀────────│                  │     │
-│  └──────────────────┘         └──────────────────┘     │
-│                                                        │
-└────────────────────────────────────────────────────────┘
-                         │
-                         │ Tailscale Network
-                         ▼
-              ┌─────────────────────┐
-              │  Tailnet Clients    │
-              │  Access services:   │
-              │  web.tailnet.ts.net │
-              └─────────────────────┘
-
-Flow: Tailscale → localhost:9080 → Container:80
-```
 
 ## Examples
 
@@ -278,4 +263,7 @@ docker build -t docktail:latest .
 
 ## License
 
-MIT
+AGPL v3
+
+----
+By [@marvinvr](https://marvinvr.ch)
