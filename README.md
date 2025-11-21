@@ -2,8 +2,11 @@
 
 **Unleash your Containers as Tailscale Services**
 
-Automatically expose Docker containers as Tailscale Services using label-based configuration - zero-config service mesh for your dockerized services.
+<p align="center">
+  <img src="assets/header.jpeg" alt="DockTail Header" width="100%">
+</p>
 
+Automatically expose Docker containers as Tailscale Services using label-based configuration - zero-config service mesh for your dockerized services.
 
 ```
  ┌────────────────────────────────────────────────────────┐
