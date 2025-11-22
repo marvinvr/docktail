@@ -53,13 +53,22 @@ jobs:
           flavor: |
             latest=false
 
+      - name: Prepare tags with architecture suffix
+        id: arch-tags
+        run: |
+          TAGS="${{ steps.meta.outputs.tags }}"
+          ARCH_TAGS=$(echo "$TAGS" | sed "s/$/-${{ matrix.arch }}/")
+          echo "tags<<EOF" >> $GITHUB_OUTPUT
+          echo "$ARCH_TAGS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.meta.outputs.tags }}-${{ matrix.arch }}
+          tags: ${{ steps.arch-tags.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
