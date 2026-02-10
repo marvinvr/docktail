@@ -40,6 +40,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Determine if prerelease
+        id: release-type
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            CHANNEL=$(echo "$TAG" | sed 's/^v\?[0-9]*\.[0-9]*\.[0-9]*-//' | sed 's/\..*//')
+            echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
@@ -47,9 +59,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.release-type.outputs.prerelease == 'false' }}
+            type=semver,pattern={{major}},enable=${{ steps.release-type.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ steps.release-type.outputs.prerelease == 'false' }}
+            type=raw,value=${{ steps.release-type.outputs.channel }},enable=${{ steps.release-type.outputs.prerelease == 'true' }}
           flavor: |
             latest=false
 
@@ -88,6 +101,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Determine if prerelease
+        id: release-type
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> $GITHUB_OUTPUT
+            CHANNEL=$(echo "$TAG" | sed 's/^v\?[0-9]*\.[0-9]*\.[0-9]*-//' | sed 's/\..*//')
+            echo "channel=$CHANNEL" >> $GITHUB_OUTPUT
+          else
+            echo "prerelease=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Extract metadata (tags, labels)
         id: meta
         uses: docker/metadata-action@v5
@@ -95,9 +120,10 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
+            type=semver,pattern={{major}}.{{minor}},enable=${{ steps.release-type.outputs.prerelease == 'false' }}
+            type=semver,pattern={{major}},enable=${{ steps.release-type.outputs.prerelease == 'false' }}
+            type=raw,value=latest,enable=${{ steps.release-type.outputs.prerelease == 'false' }}
+            type=raw,value=${{ steps.release-type.outputs.channel }},enable=${{ steps.release-type.outputs.prerelease == 'true' }}
 
       - name: Create and push manifest
         run: |
