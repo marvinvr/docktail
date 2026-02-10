@@ -542,4 +542,3 @@ func (c *Client) checkReachability(ip string, port string) error {
 	conn.Close()
 	return nil
 }
-
