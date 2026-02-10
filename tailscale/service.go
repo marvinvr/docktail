@@ -173,6 +173,20 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 			return nil
 		}
 
+		if isUntaggedNodeError(stderr) {
+			return fmt.Errorf("failed to add service: your Tailscale node is not tagged. " +
+				"Tailscale Services require the host node to advertise ACL tags.\n" +
+				"To fix this:\n" +
+				"  1. Tag your Tailscale node:\n" +
+				"     - Host install: sudo tailscale up --advertise-tags=tag:server --reset\n" +
+				"     - Sidecar container: set TS_EXTRA_ARGS=--advertise-tags=tag:server in your Tailscale container's environment\n" +
+				"     - Or tag it in the Tailscale admin console: https://login.tailscale.com/admin/machines → click your node → Edit ACL tags\n" +
+				"  2. Add an ACL auto-approver at https://login.tailscale.com/admin/acls:\n" +
+				"     \"autoApprovers\": { \"services\": { \"tag:container\": [\"tag:server\"] } }\n" +
+				"  3. Approve the service at https://login.tailscale.com/admin/services\n" +
+				"Full setup guide: https://github.com/marvinvr/docktail#tailscale-admin-setup")
+		}
+
 		return fmt.Errorf("failed to add service: %w\nOutput: %s", err, stderr)
 	}
 

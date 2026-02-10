@@ -19,19 +19,19 @@ import (
 
 // Client handles Tailscale CLI interactions and API calls
 type Client struct {
-	socketPath    string
-	tailnet       string
-	baseURL       string
-	httpClient    *http.Client
+	socketPath     string
+	tailnet        string
+	baseURL        string
+	httpClient     *http.Client
 	apiSyncEnabled bool
 }
 
 // ClientConfig holds configuration for creating a Tailscale client
 type ClientConfig struct {
-	SocketPath      string
-	Tailnet         string
-	APIKey          string
-	OAuthClientID   string
+	SocketPath        string
+	Tailnet           string
+	APIKey            string
+	OAuthClientID     string
 	OAuthClientSecret string
 }
 
@@ -384,7 +384,7 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -428,7 +428,7 @@ func (c *Client) getService(ctx context.Context, serviceName string) (*apiServic
 	if err != nil {
 		return nil, fmt.Errorf("GET request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil

@@ -39,6 +39,11 @@ func isConfigConflictError(stderr string) bool {
 		strings.Contains(stderr, "port is already serving")
 }
 
+// isUntaggedNodeError checks if the error is because the Tailscale node is not tagged
+func isUntaggedNodeError(stderr string) bool {
+	return strings.Contains(stderr, "service hosts must be tagged nodes")
+}
+
 // isManagedService checks if a service name has the "svc:" prefix
 // This indicates it's managed by DockTail and safe to modify
 func isManagedService(serviceName string) bool {

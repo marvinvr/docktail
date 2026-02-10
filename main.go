@@ -63,7 +63,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Docker client")
 	}
-	defer dockerClient.Close()
+	defer func() { _ = dockerClient.Close() }()
 
 	log.Info().Msg("Docker client initialized")
 
