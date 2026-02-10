@@ -120,6 +120,16 @@ services:
       - TAILSCALE_OAUTH_CLIENT_SECRET=${TAILSCALE_OAUTH_CLIENT_SECRET}
 ```
 
+**Host tag requirement:** The host machine running Tailscale must advertise a tag that matches your ACL auto-approvers (see [Tailscale Admin Setup](#tailscale-admin-setup)). For example:
+
+```bash
+sudo tailscale up --advertise-tags=tag:server --reset
+```
+
+> **Warning:** The `--reset` flag briefly drops the Tailscale connection. If you are connected via SSH over Tailscale, your session will be interrupted momentarily. The connection will restore automatically once Tailscale reconnects.
+
+When using the sidecar setup below, the sidecar container handles its own tags via `TS_AUTHKEY`, so this step is not needed.
+
 ### Tailscale Sidecar
 
 For systems without Tailscale installed on the host:
@@ -162,6 +172,36 @@ volumes:
 ```
 
 Set `TAILSCALE_AUTH_KEY` to authenticate the Tailscale container (generate at [Tailscale Admin → Settings → Keys](https://login.tailscale.com/admin/settings/keys)).
+
+## Tailscale Admin Setup
+
+After deploying DockTail, you need to configure a few things in the [Tailscale Admin Console](https://login.tailscale.com/admin) for services to work.
+
+### 1. Configure Access Controls (ACLs)
+
+Services require ACL auto-approvers to allow the host machine to advertise them. Go to [Access Controls](https://login.tailscale.com/admin/acls) and add an `autoApprovers` block:
+
+```json
+{
+  "autoApprovers": {
+    "services": {
+      "tag:container": ["tag:server"]
+    }
+  }
+}
+```
+
+This allows machines tagged `tag:server` to advertise services tagged `tag:container` (the default DockTail tag). Adjust the tags to match your setup — the right side must match the tag on your host machine (or sidecar auth key), and the left side must match the `docktail.tags` label on your containers (defaults to `tag:container`).
+
+### 2. Approve the Service
+
+The first time a new service is advertised, it must be manually approved in the Tailscale Admin Console:
+
+1. Go to the [Services tab](https://login.tailscale.com/admin/services)
+2. Find the newly advertised service
+3. Approve it to allow traffic
+
+After the initial approval, the service will continue to work automatically on subsequent container restarts. If you are using OAuth or API key mode, service definitions are auto-created, but the first approval may still be required depending on your ACL configuration.
 
 ## Labeling Containers
 
@@ -326,19 +366,7 @@ If both OAuth and API key are set, OAuth takes precedence.
 
 ### ACL Configuration
 
-For manual mode or fine-grained access control, configure ACLs in your [Tailscale Access Controls](https://login.tailscale.com/admin/acls):
-
-```json
-{
-  "autoApprovers": {
-    "services": {
-      "tag:container": ["tag:homelab"]
-    }
-  }
-}
-```
-
-This allows machines tagged `tag:homelab` to advertise services tagged `tag:container`. Ensure your Docker host has the appropriate tag: `tailscale up --advertise-tags=tag:homelab`
+See [Tailscale Admin Setup](#tailscale-admin-setup) for the required ACL auto-approver configuration and service approval steps.
 
 ## How It Works
 
