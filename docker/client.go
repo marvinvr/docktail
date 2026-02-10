@@ -3,7 +3,9 @@ package docker
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
@@ -218,25 +220,66 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 
 	// Check if container uses host networking
 	isHostNetwork := inspect.HostConfig != nil && string(inspect.HostConfig.NetworkMode) == "host"
+	// Check if container uses no networking
+	isNoNetwork := inspect.HostConfig != nil && string(inspect.HostConfig.NetworkMode) == "none"
 
-	// Tailscale serve only supports localhost/127.0.0.1 proxies
-	// We need to find the published host port that maps to the target port
-	var hostPort string
-	targetPortKey := nat.Port(fmt.Sprintf("%s/tcp", targetPort))
+	// Direct container IP proxying is enabled by default
+	// Set docktail.service.direct=false to use published port bindings instead
+	isDirectMode := labels[apptypes.LabelDirect] != "false"
+	specifiedNetwork := labels[apptypes.LabelNetwork]
+
+	// Variables for destination configuration
+	var destIP string
+	var destPort string
 
 	if isHostNetwork {
-		// For host networking, the container port IS the host port
-		hostPort = targetPort
+		// For host networking, the container port IS the host port on localhost
+		destIP = "localhost"
+		destPort = targetPort
 		log.Info().
 			Str("container", containerName).
 			Str("port", targetPort).
 			Msg("Container uses host networking, port is directly accessible on localhost")
+	} else if isDirectMode {
+		// Direct mode: proxy to container IP instead of published host port
+		if isNoNetwork {
+			return nil, fmt.Errorf("container '%s' uses network_mode: none, cannot use direct mode", containerName)
+		}
+
+		// Get container IP from network settings
+		containerIP, networkName, err := c.getContainerIP(inspect, specifiedNetwork, containerName)
+		if err != nil {
+			return nil, err
+		}
+
+		destIP = containerIP
+		destPort = targetPort // Use container port directly
+
+		// Optional reachability check - just for debugging, doesn't block configuration
+		if err := c.checkReachability(containerIP, targetPort); err != nil {
+			log.Debug().
+				Str("container", containerName).
+				Str("container_ip", containerIP).
+				Str("port", targetPort).
+				Msg("Container not yet reachable (may still be starting)")
+		}
+
+		log.Info().
+			Str("container", containerName).
+			Str("container_ip", containerIP).
+			Str("container_port", targetPort).
+			Str("network", networkName).
+			Str("will_proxy_to", fmt.Sprintf("%s:%s", containerIP, targetPort)).
+			Msg("Proxying directly to container IP (no port publishing required)")
 	} else {
-		// Normal bridge networking - need to find published port bindings
+		// Direct mode disabled (docktail.service.direct=false) - need published port bindings
+		targetPortKey := nat.Port(fmt.Sprintf("%s/tcp", targetPort))
+		var hostPort string
+
 		log.Debug().
 			Str("container", containerName).
 			Str("looking_for_port", string(targetPortKey)).
-			Msg("Looking for published port binding")
+			Msg("Direct mode disabled, looking for published port binding")
 
 		if inspect.HostConfig != nil && inspect.HostConfig.PortBindings != nil {
 			if bindings, ok := inspect.HostConfig.PortBindings[targetPortKey]; ok && len(bindings) > 0 {
@@ -275,24 +318,26 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 				Str("container", containerName).
 				Str("needed_port", string(targetPortKey)).
 				Strs("available_ports", availablePorts).
-				Msg("Port not found in bindings")
+				Msg("Port not found in bindings (direct mode is disabled)")
 
 			return nil, fmt.Errorf(
-				"container port %s is NOT published to host. "+
-					"Tailscale serve requires localhost proxies. "+
-					"Fix: Add 'ports: [\"%s:%s\"]' to container '%s' in docker-compose.yaml. "+
-					"Format is HOST:CONTAINER where %s is the CONTAINER port (docktail.service.port=%s). "+
+				"container port %s is NOT published to host (direct mode disabled via docktail.service.direct=false). "+
+					"Fix: Add 'ports: [\"%s:%s\"]' to container '%s' in docker-compose.yaml, "+
+					"or remove 'docktail.service.direct=false' to use container IP directly. "+
 					"Available published ports: %v",
-				targetPort, targetPort, targetPort, containerName, targetPort, targetPort, availablePorts,
+				targetPort, targetPort, targetPort, containerName, availablePorts,
 			)
 		}
+
+		destIP = "localhost"
+		destPort = hostPort
 
 		log.Info().
 			Str("container", containerName).
 			Str("container_port", targetPort).
 			Str("host_port", hostPort).
 			Str("will_proxy_to", fmt.Sprintf("localhost:%s", hostPort)).
-			Msg("Detected port binding for Tailscale proxy")
+			Msg("Direct mode disabled - using published port binding")
 	}
 
 	// Parse tags
@@ -373,6 +418,9 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		if isHostNetwork {
 			// For host networking, the container port IS the host port
 			funnelTargetPort = funnelPort
+		} else if isDirectMode {
+			// Direct mode: use container port directly (funnel will use same destIP as service)
+			funnelTargetPort = funnelPort
 		} else {
 			funnelPortKey := nat.Port(fmt.Sprintf("%s/tcp", funnelPort))
 			if inspect.HostConfig != nil && inspect.HostConfig.PortBindings != nil {
@@ -387,7 +435,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 			}
 
 			if funnelTargetPort == "" {
-				return nil, fmt.Errorf("funnel container port %s is NOT published to host. Add it to ports in docker-compose", funnelPort)
+				return nil, fmt.Errorf("funnel container port %s is NOT published to host (direct mode disabled). Add it to ports in docker-compose, or remove 'docktail.service.direct=false'", funnelPort)
 			}
 		}
 
@@ -405,15 +453,93 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		ContainerName:    containerName,
 		ServiceName:      serviceName,
 		Port:             port,
-		TargetPort:       hostPort, // Use the published host port
+		TargetPort:       destPort,
 		ServiceProtocol:  serviceProtocol,
 		Protocol:         protocol,
 		Tags:             tags,
-		IPAddress:        "localhost", // Tailscale serve requires localhost
+		IPAddress:        destIP,
 		FunnelEnabled:    funnelEnabled,
 		FunnelPort:       funnelPort,       // Container port for funnel
-		FunnelTargetPort: funnelTargetPort, // Host port for funnel
+		FunnelTargetPort: funnelTargetPort, // Host port for funnel (or container port in direct mode)
 		FunnelFunnelPort: funnelFunnelPort, // Public port for funnel
 		FunnelProtocol:   funnelProtocol,
 	}, nil
 }
+
+// getContainerIP extracts the container's IP address from the specified or default network
+func (c *Client) getContainerIP(inspect container.InspectResponse, specifiedNetwork string, containerName string) (string, string, error) {
+	if inspect.NetworkSettings == nil || inspect.NetworkSettings.Networks == nil {
+		return "", "", fmt.Errorf("container '%s' has no network settings", containerName)
+	}
+
+	networks := inspect.NetworkSettings.Networks
+
+	// If a specific network is specified, use it
+	if specifiedNetwork != "" {
+		// Try exact match first
+		if network, ok := networks[specifiedNetwork]; ok {
+			if network.IPAddress == "" {
+				return "", "", fmt.Errorf("container '%s' has no IP address on network '%s'", containerName, specifiedNetwork)
+			}
+			return network.IPAddress, specifiedNetwork, nil
+		}
+
+		// Try suffix match (handles docker-compose project prefixes like "projectname_backend")
+		for networkName, network := range networks {
+			if strings.HasSuffix(networkName, "_"+specifiedNetwork) {
+				if network.IPAddress == "" {
+					return "", "", fmt.Errorf("container '%s' has no IP address on network '%s'", containerName, networkName)
+				}
+				log.Debug().
+					Str("container", containerName).
+					Str("requested", specifiedNetwork).
+					Str("matched", networkName).
+					Msg("Matched network by suffix (docker-compose prefix detected)")
+				return network.IPAddress, networkName, nil
+			}
+		}
+
+		return "", "", fmt.Errorf("container '%s' is not connected to network '%s' (available: %v)", containerName, specifiedNetwork, getNetworkNames(networks))
+	}
+
+	// No network specified - try common defaults then fall back to first available
+	// Priority: bridge > first available
+	if network, ok := networks["bridge"]; ok && network.IPAddress != "" {
+		return network.IPAddress, "bridge", nil
+	}
+
+	// Fall back to first available network with an IP
+	for networkName, network := range networks {
+		if network.IPAddress != "" {
+			log.Debug().
+				Str("container", containerName).
+				Str("network", networkName).
+				Str("ip", network.IPAddress).
+				Msg("Using first available network for direct mode")
+			return network.IPAddress, networkName, nil
+		}
+	}
+
+	return "", "", fmt.Errorf("container '%s' has no IP address on any network", containerName)
+}
+
+// getNetworkNames returns a list of network names from the networks map
+func getNetworkNames[V any](networks map[string]V) []string {
+	names := make([]string, 0, len(networks))
+	for name := range networks {
+		names = append(names, name)
+	}
+	return names
+}
+
+// checkReachability performs a quick TCP connection test (best-effort, non-blocking)
+func (c *Client) checkReachability(ip string, port string) error {
+	address := net.JoinHostPort(ip, port)
+	conn, err := net.DialTimeout("tcp", address, 1*time.Second)
+	if err != nil {
+		return err
+	}
+	conn.Close()
+	return nil
+}
+

@@ -35,8 +35,7 @@ services:
 
   myapp:
     image: nginx:latest
-    ports:
-      - "8080:80"
+    # No ports needed! DockTail proxies directly to container IP
     labels:
       - "docktail.service.enable=true"
       - "docktail.service.name=myapp"
@@ -165,16 +164,24 @@ Set `TAILSCALE_AUTH_KEY` to authenticate the Tailscale container (generate at [T
 
 ## Labeling Containers
 
-### Port Requirement
+### Direct Container IP Proxying (Default)
 
-**Container ports MUST be published to host.** Tailscale serve proxies to `localhost`.
+By default, DockTail proxies directly to container IPs on the Docker bridge network. **No port publishing required!**
 
 ```yaml
-ports:
-  - "8080:80"  # HOST:CONTAINER - required!
+services:
+  myapp:
+    image: nginx:latest
+    # No ports needed!
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=myapp"
+      - "docktail.service.port=80"
 ```
 
-**Exception:** Containers with `network_mode: host` don't need port publishing.
+DockTail automatically detects the container's IP address and configures Tailscale to proxy directly to it. When containers restart and get new IPs, DockTail automatically updates the configuration.
+
+**Opt-out:** Set `docktail.service.direct=false` to use published port bindings instead (legacy behavior).
 
 ### Service Labels
 
@@ -182,7 +189,9 @@ ports:
 |-------|----------|---------|-------------|
 | `docktail.service.enable` | Yes | - | Enable DockTail for container |
 | `docktail.service.name` | Yes | - | Service name (e.g., `web`, `api`) |
-| `docktail.service.port` | Yes | - | Container port (right side of `ports:`) |
+| `docktail.service.port` | Yes | - | Container port to proxy to |
+| `docktail.service.direct` | No | `true` | Proxy directly to container IP (no port publishing needed) |
+| `docktail.service.network` | No | `bridge` | Docker network to use for container IP |
 | `docktail.service.protocol` | No | Smart* | Container protocol: `http`, `https`, `https+insecure`, `tcp`, `tls-terminated-tcp` |
 | `docktail.service.service-port` | No | Smart** | Port Tailscale listens on |
 | `docktail.service.service-protocol` | No | Smart*** | Tailscale protocol: `http`, `https`, `tcp` |
@@ -216,8 +225,7 @@ Funnel exposes your service to the **public internet**. Independent from service
 services:
   nginx:
     image: nginx:latest
-    ports:
-      - "8080:80"
+    # No ports needed - DockTail proxies directly to container IP
     labels:
       - "docktail.service.enable=true"
       - "docktail.service.name=web"
@@ -230,8 +238,6 @@ services:
 services:
   api:
     image: myapi:latest
-    ports:
-      - "8080:3000"
     labels:
       - "docktail.service.enable=true"
       - "docktail.service.name=api"
@@ -247,8 +253,6 @@ Access: `https://api.your-tailnet.ts.net`
 services:
   postgres:
     image: postgres:16
-    ports:
-      - "5432:5432"
     labels:
       - "docktail.service.enable=true"
       - "docktail.service.name=db"
@@ -257,17 +261,37 @@ services:
       - "docktail.service.service-port=5432"
 ```
 
-### Host Networking
+### Custom Docker Network
 
 ```yaml
 services:
   app:
     image: myapp:latest
-    network_mode: host
+    networks:
+      - backend
     labels:
       - "docktail.service.enable=true"
       - "docktail.service.name=app"
-      - "docktail.service.port=3000"  # No port mapping needed
+      - "docktail.service.port=3000"
+      - "docktail.service.network=backend"  # Specify which network to use
+
+networks:
+  backend:
+```
+
+### Legacy Mode (Published Ports)
+
+```yaml
+services:
+  app:
+    image: myapp:latest
+    ports:
+      - "8080:3000"  # Required when direct=false
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=app"
+      - "docktail.service.port=3000"
+      - "docktail.service.direct=false"  # Use published port instead of container IP
 ```
 
 ### Public Website with Funnel
@@ -276,8 +300,6 @@ services:
 services:
   website:
     image: nginx:latest
-    ports:
-      - "8080:80"
     labels:
       - "docktail.service.enable=true"
       - "docktail.service.name=website"
@@ -352,12 +374,12 @@ This allows machines tagged `tag:homelab` to advertise services tagged `tag:cont
  │  └────────┬─────────┘         └────────┬─────────┘     │
  │           │                            │               │
  │           │ Docker Socket              │ Proxies to    │
- │           │ Monitoring                 │ localhost     │
+ │           │ Monitoring                 │ container IP  │
  │           ▼                            ▼               │
  │  ┌──────────────────┐         ┌──────────────────┐     │
- │  │   App Container  │◀────────│  localhost:9080  │     │
- │  │   Port 80        │  Mapped │  localhost:9081  │     │
- │  │  ports: 9080:80  │◀────────│                  │     │
+ │  │   App Container  │◀────────│  172.17.0.3:80   │     │
+ │  │   Port 80        │         │  (bridge network)│     │
+ │  │  No ports needed │◀────────│                  │     │
  │  └──────────────────┘         └──────────────────┘     │
  │                                                        │
  └────────────────────────────────────────────────────────┘
@@ -373,13 +395,15 @@ This allows machines tagged `tag:homelab` to advertise services tagged `tag:cont
 
 1. **Container Discovery** - Monitors Docker events for container start/stop
 2. **Label Parsing** - Extracts service configuration from container labels
-3. **Port Detection** - Queries Docker API for published host ports
-4. **Config Generation** - Creates Tailscale service config proxying to `localhost:HOST_PORT`
+3. **IP Detection** - Gets container IP from Docker network settings (default: bridge)
+4. **Config Generation** - Creates Tailscale service config proxying to container IP
 5. **Service Advertisement** - Executes Tailscale CLI to advertise services
 6. **Control Plane Sync** - If OAuth/API key configured, creates service definitions via API
-7. **Reconciliation** - Periodically syncs state between Docker and Tailscale
+7. **Reconciliation** - Periodically syncs state; auto-updates when container IPs change
 
-**Note:** DockTail does NOT delete service definitions from the API when containers stop (conservative deletion strategy).
+**Notes:**
+- DockTail does NOT delete service definitions from the API when containers stop (conservative deletion strategy)
+- Container IP changes on restart are handled automatically during reconciliation
 
 ## Building from Source
 

@@ -42,4 +42,6 @@ const (
 	LabelFunnelPort        = "docktail.funnel.port"        // Container port (like service.port)
 	LabelFunnelFunnelPort  = "docktail.funnel.funnel-port" // Public port (443, 8443, 10000)
 	LabelFunnelProtocol    = "docktail.funnel.protocol"
+	LabelDirect            = "docktail.service.direct"  // Direct container IP proxying (default: true, set to "false" to use published ports)
+	LabelNetwork           = "docktail.service.network" // Docker network to use for container IP (default: bridge or first available)
 )

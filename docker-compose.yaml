@@ -12,80 +12,92 @@ services:
       # Tailscale socket for CLI communication
       - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
     environment:
-      - LOG_LEVEL=info
+      - LOG_LEVEL=debug
       - RECONCILE_INTERVAL=60s
-    # Optional: use host network mode to avoid networking issues
-    # network_mode: host
 
-  # Example web application - nginx instance 1 (with HTTPS on Tailscale)
+  # Example: Direct mode (default) - no ports needed!
   web1:
     build: ./test/nginx-web1
     container_name: web1
     restart: unless-stopped
-    ports:
-      - "9080:80"  # HOST:CONTAINER - Publish container's port 80 to host's port 9080
+    # No ports needed - DockTail proxies directly to container IP
     labels:
       - "docktail.service.enable=true"
       - "docktail.service.name=test-web1"
-      - "docktail.service.port=80"               # CONTAINER port (RIGHT side of "9080:80" above)
-      - "docktail.service.protocol=http"         # Container speaks HTTP (Tailscale terminates TLS)
-      - "docktail.service.service-port=80"      # Port to expose on Tailscale (defaults to HTTPS)
-      - "docktail.service.service-protocol=http" # Tailscale serves HTTPS with auto TLS cert
+      - "docktail.service.port=80"
+      - "docktail.service.protocol=http"
+      - "docktail.service.service-port=80"
+      - "docktail.service.service-protocol=http"
 
-  # Example web application - nginx instance 2 (using smart defaults)
+  # Example: Direct mode with HTTPS (using smart defaults)
   web2:
     build: ./test/nginx-web2
     container_name: web2
     restart: unless-stopped
-    ports:
-      - "9081:80"  # HOST:CONTAINER - Publish container's port 80 to host's port 9081
+    # No ports needed - DockTail proxies directly to container IP
     labels:
       - "docktail.service.enable=true"
       - "docktail.service.name=test-web2"
-      - "docktail.service.port=80"  # CONTAINER port (RIGHT side of "9081:80" above)
-      - "docktail.service.service-protocol=https"  # Tailscale serves HTTPS
+      - "docktail.service.port=80"
+      - "docktail.service.service-protocol=https"
       # service-port defaults to "443" (based on service-protocol=https)
-      # protocol defaults to "http" (based on container port=80, not 443)
 
   # Example: Serve + Funnel (both tailnet AND public internet access)
   web-public:
     build: ./test/nginx-web1
     container_name: web-public
     restart: unless-stopped
-    ports:
-      - "9082:80"  # HOST:CONTAINER
+    # No ports needed - direct mode handles both serve and funnel
     labels:
       # Serve configuration (tailnet-only):
-      - "docktail.service.enable=true"               # Enable serve
-      - "docktail.service.name=public-demo"          # Service name (tailnet only)
-      - "docktail.service.port=80"                   # Container port for serve
-      - "docktail.service.service-port=443"          # Tailnet HTTPS port
+      - "docktail.service.enable=true"
+      - "docktail.service.name=public-demo"
+      - "docktail.service.port=80"
+      - "docktail.service.service-port=443"
 
       # Funnel configuration (public internet):
-      - "docktail.funnel.enable=true"                # ⚠️ Enable funnel (public access)
-      - "docktail.funnel.port=80"                    # Container port for funnel
+      - "docktail.funnel.enable=true"
+      - "docktail.funnel.port=80"
 
-      # Result:
-      # Tailnet: https://public-demo.<tailnet>.ts.net (serve)
-      # Public:  https://<machine-name>.<tailnet>.ts.net:443 (funnel)
-
-  # Example: TCP service (tests fix for issue #3)
+  # Example: TCP service with direct mode
   test-tcp:
     image: nginx:latest
     container_name: test-tcp
     restart: unless-stopped
-    ports:
-      - "9090:80"
+    # No ports needed
     labels:
       - "docktail.service.enable=true"
       - "docktail.service.name=test-tcp"
       - "docktail.service.port=80"
       - "docktail.service.protocol=tcp"
-      # service-protocol should auto-default to "tcp" (matches backend)
-      # service-port should auto-default to "80"
-      # Result: tailscale serve --service=svc:tcp-test --tcp=80 tcp://localhost:9090
 
-  # Example: Host networking mode (tests fix for issue #6)
+  # Example: Legacy mode (published ports) - opt out of direct mode
+  test-legacy:
+    image: nginx:latest
+    container_name: test-legacy
+    restart: unless-stopped
+    ports:
+      - "9080:80"  # Required when direct=false
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=test-legacy"
+      - "docktail.service.port=80"
+      - "docktail.service.direct=false"  # Use published port instead of container IP
+
+  # Example: Custom Docker network
+  test-custom-network:
+    image: nginx:latest
+    container_name: test-custom-network
+    restart: unless-stopped
+    networks:
+      - backend
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=test-custom-net"
+      - "docktail.service.port=80"
+      - "docktail.service.network=backend"  # Specify which network to use
+
+  # Example: Host networking mode
   test-host-network:
     image: nginx:latest
     container_name: test-host-network
@@ -95,8 +107,10 @@ services:
       - "docktail.service.enable=true"
       - "docktail.service.name=test-host"
       - "docktail.service.port=80"
-      # No port mapping needed! Container uses host network directly
-      # Nginx listens on port 80, accessible on localhost:80
+      # Host network uses localhost directly
+
+networks:
+  backend:
 
 volumes:
   postgres-data:
