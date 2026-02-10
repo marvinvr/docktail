@@ -14,9 +14,9 @@ import (
 
 // FunnelStatus represents the JSON structure from 'tailscale funnel status --json'
 type FunnelStatus struct {
-	TCP         map[string]map[string]bool   `json:"TCP"`
-	Web         map[string]FunnelWebConfig   `json:"Web"`
-	AllowFunnel map[string]bool              `json:"AllowFunnel"`
+	TCP         map[string]map[string]bool `json:"TCP"`
+	Web         map[string]FunnelWebConfig `json:"Web"`
+	AllowFunnel map[string]bool            `json:"AllowFunnel"`
 }
 
 type FunnelWebConfig struct {

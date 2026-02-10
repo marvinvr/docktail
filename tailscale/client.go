@@ -19,19 +19,19 @@ import (
 
 // Client handles Tailscale CLI interactions and API calls
 type Client struct {
-	socketPath    string
-	tailnet       string
-	baseURL       string
-	httpClient    *http.Client
+	socketPath     string
+	tailnet        string
+	baseURL        string
+	httpClient     *http.Client
 	apiSyncEnabled bool
 }
 
 // ClientConfig holds configuration for creating a Tailscale client
 type ClientConfig struct {
-	SocketPath      string
-	Tailnet         string
-	APIKey          string
-	OAuthClientID   string
+	SocketPath        string
+	Tailnet           string
+	APIKey            string
+	OAuthClientID     string
 	OAuthClientSecret string
 }
 
