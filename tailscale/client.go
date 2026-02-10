@@ -384,7 +384,7 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 	if err != nil {
 		return fmt.Errorf("request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -428,7 +428,7 @@ func (c *Client) getService(ctx context.Context, serviceName string) (*apiServic
 	if err != nil {
 		return nil, fmt.Errorf("GET request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, nil
