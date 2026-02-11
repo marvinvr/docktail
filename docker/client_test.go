@@ -1,7 +1,7 @@
 package docker
 
 import (
-	"fmt"
+	"strconv"
 	"testing"
 )
 
@@ -277,8 +277,7 @@ func TestCollectIndexedPorts(t *testing.T) {
 			indices := map[int]bool{}
 			for key := range tt.labels {
 				if matches := indexedPortRegex.FindStringSubmatch(key); matches != nil {
-					var idx int
-					fmt.Sscanf(matches[1], "%d", &idx)
+					idx, _ := strconv.Atoi(matches[1])
 					indices[idx] = true
 				}
 			}
