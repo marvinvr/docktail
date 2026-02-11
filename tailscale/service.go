@@ -129,7 +129,7 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 	portArg := fmt.Sprintf("%s=%s", protocolFlag, svc.Port)
 	serviceArg := fmt.Sprintf("--service=%s", serviceName)
 
-	cmd := exec.CommandContext(ctx, "tailscale", "serve", "--bg", serviceArg, portArg, destination)
+	cmd := exec.CommandContext(ctx, "tailscale", "serve", serviceArg, portArg, destination)
 
 	log.Debug().
 		Str("command", cmd.String()).

@@ -202,6 +202,13 @@ if [ $elapsed -ge $MAX_WAIT ]; then
 fi
 echo "  Tailscale connected after ${elapsed}s"
 
+# Give Tailscale a moment to fully register with the control plane
+# BackendState=Running means authenticated, but service registration needs
+# the control plane handshake to complete
+log "Waiting for Tailscale to be fully ready for service registration"
+sleep 10
+echo "  Ready"
+
 log "Tailing DockTail logs (waiting for first successful reconciliation)"
 # Stream DockTail logs in the background so CI output shows what's happening
 docker logs -f "$DOCKTAIL_CONTAINER" 2>&1 &
