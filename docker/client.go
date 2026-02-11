@@ -23,6 +23,19 @@ import (
 // indexedPortRegex matches labels like "docktail.service.1.port", "docktail.service.2.port", etc.
 var indexedPortRegex = regexp.MustCompile(`^docktail\.service\.(\d+)\.port$`)
 
+// containerCtx holds shared container context used across multi-port parsing.
+type containerCtx struct {
+	containerID      string
+	containerName    string
+	specifiedNetwork string
+	inspect          container.InspectResponse
+	tags             []string
+	destIP           string
+	isHostNetwork    bool
+	isNoNetwork      bool
+	isDirectMode     bool
+}
+
 // Client wraps the Docker client with our business logic
 type Client struct {
 	cli         *client.Client
@@ -107,8 +120,11 @@ func resolveProtocols(containerID, targetPort, servicePort, serviceProtocol, pro
 
 	// Validate target protocol
 	validProtocols := map[string]bool{
-		"http": true, "https": true, "https+insecure": true,
-		"tcp": true, "tls-terminated-tcp": true,
+		"http":               true,
+		"https":              true,
+		"https+insecure":     true,
+		"tcp":                true,
+		"tls-terminated-tcp": true,
 	}
 	if !validProtocols[protocol] {
 		return "", "", "", fmt.Errorf("invalid protocol: %s (must be http, https, https+insecure, tcp, or tls-terminated-tcp)", protocol)
@@ -170,7 +186,10 @@ func resolveProtocols(containerID, targetPort, servicePort, serviceProtocol, pro
 
 	// Validate service protocol
 	validServiceProtocols := map[string]bool{
-		"http": true, "https": true, "tcp": true, "tls-terminated-tcp": true,
+		"http":               true,
+		"https":              true,
+		"tcp":                true,
+		"tls-terminated-tcp": true,
 	}
 	if !validServiceProtocols[serviceProtocol] {
 		return "", "", "", fmt.Errorf("invalid service-protocol: %s (must be http, https, tcp, or tls-terminated-tcp)", serviceProtocol)
@@ -181,35 +200,35 @@ func resolveProtocols(containerID, targetPort, servicePort, serviceProtocol, pro
 
 // resolveDestPort determines the destination IP and port based on networking mode.
 // Returns (destIP, destPort, error).
-func (c *Client) resolveDestPort(inspect container.InspectResponse, targetPort string, isHostNetwork, isNoNetwork, isDirectMode bool, specifiedNetwork, containerName string) (string, string, error) {
-	if isHostNetwork {
+func (c *Client) resolveDestPort(cctx *containerCtx, targetPort string) (string, string, error) {
+	if cctx.isHostNetwork {
 		log.Info().
-			Str("container", containerName).
+			Str("container", cctx.containerName).
 			Str("port", targetPort).
 			Msg("Container uses host networking, port is directly accessible on localhost")
 		return "localhost", targetPort, nil
 	}
 
-	if isDirectMode {
-		if isNoNetwork {
-			return "", "", fmt.Errorf("container '%s' uses network_mode: none, cannot use direct mode", containerName)
+	if cctx.isDirectMode {
+		if cctx.isNoNetwork {
+			return "", "", fmt.Errorf("container '%s' uses network_mode: none, cannot use direct mode", cctx.containerName)
 		}
 
-		containerIP, networkName, err := c.getContainerIP(inspect, specifiedNetwork, containerName)
+		containerIP, networkName, err := c.getContainerIP(cctx.inspect, cctx.specifiedNetwork, cctx.containerName)
 		if err != nil {
 			return "", "", err
 		}
 
 		if err := c.checkReachability(containerIP, targetPort); err != nil {
 			log.Debug().
-				Str("container", containerName).
+				Str("container", cctx.containerName).
 				Str("container_ip", containerIP).
 				Str("port", targetPort).
 				Msg("Container not yet reachable (may still be starting)")
 		}
 
 		log.Info().
-			Str("container", containerName).
+			Str("container", cctx.containerName).
 			Str("container_ip", containerIP).
 			Str("container_port", targetPort).
 			Str("network", networkName).
@@ -224,26 +243,26 @@ func (c *Client) resolveDestPort(inspect container.InspectResponse, targetPort s
 	var hostPort string
 
 	log.Debug().
-		Str("container", containerName).
+		Str("container", cctx.containerName).
 		Str("looking_for_port", string(targetPortKey)).
 		Msg("Direct mode disabled, looking for published port binding")
 
-	if inspect.HostConfig != nil && inspect.HostConfig.PortBindings != nil {
-		if bindings, ok := inspect.HostConfig.PortBindings[targetPortKey]; ok && len(bindings) > 0 {
+	if cctx.inspect.HostConfig != nil && cctx.inspect.HostConfig.PortBindings != nil {
+		if bindings, ok := cctx.inspect.HostConfig.PortBindings[targetPortKey]; ok && len(bindings) > 0 {
 			hostPort = bindings[0].HostPort
 			log.Debug().
-				Str("container", containerName).
+				Str("container", cctx.containerName).
 				Str("target_port", targetPort).
 				Str("host_port", hostPort).
 				Msg("Detected published port binding")
 		}
 	}
 
-	if hostPort == "" && inspect.NetworkSettings != nil && inspect.NetworkSettings.Ports != nil {
-		if bindings, ok := inspect.NetworkSettings.Ports[targetPortKey]; ok && len(bindings) > 0 {
+	if hostPort == "" && cctx.inspect.NetworkSettings != nil && cctx.inspect.NetworkSettings.Ports != nil {
+		if bindings, ok := cctx.inspect.NetworkSettings.Ports[targetPortKey]; ok && len(bindings) > 0 {
 			hostPort = bindings[0].HostPort
 			log.Debug().
-				Str("container", containerName).
+				Str("container", cctx.containerName).
 				Str("target_port", targetPort).
 				Str("host_port", hostPort).
 				Msg("Detected published port from NetworkSettings")
@@ -252,14 +271,14 @@ func (c *Client) resolveDestPort(inspect container.InspectResponse, targetPort s
 
 	if hostPort == "" {
 		var availablePorts []string
-		if inspect.HostConfig != nil && inspect.HostConfig.PortBindings != nil {
-			for port := range inspect.HostConfig.PortBindings {
+		if cctx.inspect.HostConfig != nil && cctx.inspect.HostConfig.PortBindings != nil {
+			for port := range cctx.inspect.HostConfig.PortBindings {
 				availablePorts = append(availablePorts, string(port))
 			}
 		}
 
 		log.Warn().
-			Str("container", containerName).
+			Str("container", cctx.containerName).
 			Str("needed_port", string(targetPortKey)).
 			Strs("available_ports", availablePorts).
 			Msg("Port not found in bindings (direct mode is disabled)")
@@ -269,12 +288,12 @@ func (c *Client) resolveDestPort(inspect container.InspectResponse, targetPort s
 				"Fix: Add 'ports: [\"%s:%s\"]' to container '%s' in docker-compose.yaml, "+
 				"or remove 'docktail.service.direct=false' to use container IP directly. "+
 				"Available published ports: %v",
-			targetPort, targetPort, targetPort, containerName, availablePorts,
+			targetPort, targetPort, targetPort, cctx.containerName, availablePorts,
 		)
 	}
 
 	log.Info().
-		Str("container", containerName).
+		Str("container", cctx.containerName).
 		Str("container_port", targetPort).
 		Str("host_port", hostPort).
 		Str("will_proxy_to", fmt.Sprintf("localhost:%s", hostPort)).
@@ -321,14 +340,18 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 
 	containerName := strings.TrimPrefix(inspect.Name, "/")
 
-	// Check networking modes
-	isHostNetwork := inspect.HostConfig != nil && string(inspect.HostConfig.NetworkMode) == "host"
-	isNoNetwork := inspect.HostConfig != nil && string(inspect.HostConfig.NetworkMode) == "none"
-	isDirectMode := labels[apptypes.LabelDirect] != "false"
-	specifiedNetwork := labels[apptypes.LabelNetwork]
+	cctx := &containerCtx{
+		containerID:      containerID,
+		containerName:    containerName,
+		specifiedNetwork: labels[apptypes.LabelNetwork],
+		inspect:          inspect,
+		isHostNetwork:    inspect.HostConfig != nil && string(inspect.HostConfig.NetworkMode) == "host",
+		isNoNetwork:      inspect.HostConfig != nil && string(inspect.HostConfig.NetworkMode) == "none",
+		isDirectMode:     labels[apptypes.LabelDirect] != "false",
+	}
 
 	// Resolve destination for primary port
-	destIP, destPort, err := c.resolveDestPort(inspect, targetPort, isHostNetwork, isNoNetwork, isDirectMode, specifiedNetwork, containerName)
+	destIP, destPort, err := c.resolveDestPort(cctx, targetPort)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +364,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 			if trimmed := strings.TrimSpace(part); trimmed != "" {
 				if !strings.HasPrefix(trimmed, "tag:") {
 					log.Warn().
-						Str("container", containerName).
+						Str("container", cctx.containerName).
 						Str("tag", trimmed).
 						Msg("Tag should start with 'tag:' prefix per Tailscale convention")
 				}
@@ -352,6 +375,8 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		tags = make([]string, len(c.defaultTags))
 		copy(tags, c.defaultTags)
 	}
+	cctx.tags = tags
+	cctx.destIP = destIP
 
 	// Parse funnel configuration (COMPLETELY INDEPENDENT of serve)
 	funnelEnabled := labels[apptypes.LabelFunnelEnable] == "true"
@@ -391,19 +416,19 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 			return nil, fmt.Errorf("invalid funnel protocol: %s (must be https, tcp, or tls-terminated-tcp)", funnelProtocol)
 		}
 
-		if isHostNetwork {
+		if cctx.isHostNetwork {
 			funnelTargetPort = funnelPort
-		} else if isDirectMode {
+		} else if cctx.isDirectMode {
 			funnelTargetPort = funnelPort
 		} else {
 			funnelPortKey := nat.Port(fmt.Sprintf("%s/tcp", funnelPort))
-			if inspect.HostConfig != nil && inspect.HostConfig.PortBindings != nil {
-				if bindings, ok := inspect.HostConfig.PortBindings[funnelPortKey]; ok && len(bindings) > 0 {
+			if cctx.inspect.HostConfig != nil && cctx.inspect.HostConfig.PortBindings != nil {
+				if bindings, ok := cctx.inspect.HostConfig.PortBindings[funnelPortKey]; ok && len(bindings) > 0 {
 					funnelTargetPort = bindings[0].HostPort
 				}
 			}
-			if funnelTargetPort == "" && inspect.NetworkSettings != nil && inspect.NetworkSettings.Ports != nil {
-				if bindings, ok := inspect.NetworkSettings.Ports[funnelPortKey]; ok && len(bindings) > 0 {
+			if funnelTargetPort == "" && cctx.inspect.NetworkSettings != nil && cctx.inspect.NetworkSettings.Ports != nil {
+				if bindings, ok := cctx.inspect.NetworkSettings.Ports[funnelPortKey]; ok && len(bindings) > 0 {
 					funnelTargetPort = bindings[0].HostPort
 				}
 			}
@@ -413,7 +438,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		}
 
 		log.Info().
-			Str("container", containerName).
+			Str("container", cctx.containerName).
 			Str("funnel_container_port", funnelPort).
 			Str("funnel_host_port", funnelTargetPort).
 			Str("funnel_public_port", funnelFunnelPort).
@@ -423,8 +448,8 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 
 	// Build primary service
 	primary := &apptypes.ContainerService{
-		ContainerID:      containerID[:12],
-		ContainerName:    containerName,
+		ContainerID:      cctx.containerID[:12],
+		ContainerName:    cctx.containerName,
 		ServiceName:      serviceName,
 		Port:             port,
 		TargetPort:       destPort,
@@ -440,7 +465,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 	}
 
 	// Parse indexed ports (multi-port support)
-	indexedServices, err := c.parseIndexedPorts(containerID, labels, inspect, serviceName, containerName, tags, destIP, isHostNetwork, isNoNetwork, isDirectMode, specifiedNetwork, port)
+	indexedServices, err := c.parseIndexedPorts(cctx, labels, serviceName, port)
 	if err != nil {
 		return nil, err
 	}
@@ -455,14 +480,9 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 // parseIndexedPorts scans labels for indexed port definitions (docktail.service.N.port)
 // and returns a ContainerService for each valid index.
 func (c *Client) parseIndexedPorts(
-	containerID string,
+	cctx *containerCtx,
 	labels map[string]string,
-	inspect container.InspectResponse,
-	serviceName, containerName string,
-	tags []string,
-	destIP string,
-	isHostNetwork, isNoNetwork, isDirectMode bool,
-	specifiedNetwork string,
+	serviceName string,
 	primaryServicePort string,
 ) ([]*apptypes.ContainerService, error) {
 	// Collect all indices from labels
@@ -489,7 +509,7 @@ func (c *Client) parseIndexedPorts(
 	sort.Ints(sorted)
 
 	log.Info().
-		Str("container", containerName).
+		Str("container", cctx.containerName).
 		Int("indexed_ports", len(sorted)).
 		Msg("Found indexed port definitions")
 
@@ -513,12 +533,12 @@ func (c *Client) parseIndexedPorts(
 		idxProtocol := labels[prefix+"protocol"]
 
 		protocol, servicePort, serviceProtocol, err := resolveProtocols(
-			containerID, targetPort, idxServicePort, idxServiceProtocol, idxProtocol,
+			cctx.containerID, targetPort, idxServicePort, idxServiceProtocol, idxProtocol,
 		)
 		if err != nil {
 			log.Warn().
 				Err(err).
-				Str("container", containerName).
+				Str("container", cctx.containerName).
 				Int("index", idx).
 				Msg("Failed to resolve protocols for indexed port, skipping")
 			continue
@@ -527,7 +547,7 @@ func (c *Client) parseIndexedPorts(
 		// Check for duplicate service-port
 		if prevIdx, exists := usedServicePorts[servicePort]; exists {
 			log.Warn().
-				Str("container", containerName).
+				Str("container", cctx.containerName).
 				Int("index", idx).
 				Int("conflicts_with", prevIdx).
 				Str("service_port", servicePort).
@@ -537,31 +557,32 @@ func (c *Client) parseIndexedPorts(
 		usedServicePorts[servicePort] = idx
 
 		// Resolve destination port
-		idxDestIP, idxDestPort, err := c.resolveDestPort(inspect, targetPort, isHostNetwork, isNoNetwork, isDirectMode, specifiedNetwork, containerName)
+		idxDestIP, idxDestPort, err := c.resolveDestPort(cctx, targetPort)
 		if err != nil {
 			log.Warn().
 				Err(err).
-				Str("container", containerName).
+				Str("container", cctx.containerName).
 				Int("index", idx).
 				Str("target_port", targetPort).
 				Msg("Failed to resolve destination for indexed port, skipping")
 			continue
 		}
 
-		// Use the same destIP as primary if in direct mode (they share the same container IP)
-		if isDirectMode && destIP != "" {
-			idxDestIP = destIP
+		// In direct mode, reuse the primary port's container IP to avoid redundant
+		// getContainerIP calls — all ports on the same container share one IP.
+		if cctx.isDirectMode && cctx.destIP != "" {
+			idxDestIP = cctx.destIP
 		}
 
 		svc := &apptypes.ContainerService{
-			ContainerID:     containerID[:12],
-			ContainerName:   containerName,
+			ContainerID:     cctx.containerID[:12],
+			ContainerName:   cctx.containerName,
 			ServiceName:     serviceName,
 			Port:            servicePort,
 			TargetPort:      idxDestPort,
 			ServiceProtocol: serviceProtocol,
 			Protocol:        protocol,
-			Tags:            tags,
+			Tags:            cctx.tags,
 			IPAddress:       idxDestIP,
 			FunnelEnabled:   false, // Indexed ports don't get funnel
 		}
@@ -569,7 +590,7 @@ func (c *Client) parseIndexedPorts(
 		services = append(services, svc)
 
 		log.Info().
-			Str("container", containerName).
+			Str("container", cctx.containerName).
 			Int("index", idx).
 			Str("target_port", targetPort).
 			Str("service_port", servicePort).

@@ -124,6 +124,10 @@ assert_service_port() {
 assert_service_has_port() {
     local name="svc:$1"
     local expected_port="$2"
+    if ! echo "$SERVE_STATUS_CACHE" | jq -e ".Services[\"$name\"]" >/dev/null 2>&1; then
+        fail "$name not found (checking for port $expected_port)"
+        return
+    fi
     if echo "$SERVE_STATUS_CACHE" | jq -e ".Services[\"$name\"].TCP[\"$expected_port\"]" >/dev/null 2>&1; then
         pass "$name has port $expected_port"
     else

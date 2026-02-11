@@ -224,6 +224,107 @@ func TestIndexedPortRegex(t *testing.T) {
 	}
 }
 
+func TestDuplicateServicePortDetection(t *testing.T) {
+	// Exercises the dedup logic used in parseIndexedPorts: given a primary
+	// service-port and a set of indexed ports that resolve to service-ports,
+	// duplicates should be detected and skipped.
+	tests := []struct {
+		name               string
+		primaryServicePort string
+		indexedPorts       []struct {
+			index       int
+			servicePort string // resolved service-port for this index
+		}
+		expectedAccepted []int // indices that should pass dedup
+		expectedSkipped  []int // indices that should be skipped
+	}{
+		{
+			name:               "no duplicates",
+			primaryServicePort: "443",
+			indexedPorts: []struct {
+				index       int
+				servicePort string
+			}{
+				{1, "8080"},
+				{2, "3000"},
+			},
+			expectedAccepted: []int{1, 2},
+		},
+		{
+			name:               "indexed port duplicates primary",
+			primaryServicePort: "80",
+			indexedPorts: []struct {
+				index       int
+				servicePort string
+			}{
+				{1, "80"},
+				{2, "3000"},
+			},
+			expectedAccepted: []int{2},
+			expectedSkipped:  []int{1},
+		},
+		{
+			name:               "two indexed ports with same service-port",
+			primaryServicePort: "443",
+			indexedPorts: []struct {
+				index       int
+				servicePort string
+			}{
+				{1, "8080"},
+				{2, "8080"},
+			},
+			expectedAccepted: []int{1},
+			expectedSkipped:  []int{2},
+		},
+		{
+			name:               "all three collide",
+			primaryServicePort: "80",
+			indexedPorts: []struct {
+				index       int
+				servicePort string
+			}{
+				{1, "80"},
+				{2, "80"},
+			},
+			expectedSkipped: []int{1, 2},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			usedServicePorts := map[string]int{tt.primaryServicePort: 0}
+			var accepted, skipped []int
+
+			for _, ip := range tt.indexedPorts {
+				if _, exists := usedServicePorts[ip.servicePort]; exists {
+					skipped = append(skipped, ip.index)
+					continue
+				}
+				usedServicePorts[ip.servicePort] = ip.index
+				accepted = append(accepted, ip.index)
+			}
+
+			if len(accepted) != len(tt.expectedAccepted) {
+				t.Errorf("accepted = %v, want %v", accepted, tt.expectedAccepted)
+			}
+			for i, idx := range accepted {
+				if i < len(tt.expectedAccepted) && idx != tt.expectedAccepted[i] {
+					t.Errorf("accepted[%d] = %d, want %d", i, idx, tt.expectedAccepted[i])
+				}
+			}
+
+			if len(skipped) != len(tt.expectedSkipped) {
+				t.Errorf("skipped = %v, want %v", skipped, tt.expectedSkipped)
+			}
+			for i, idx := range skipped {
+				if i < len(tt.expectedSkipped) && idx != tt.expectedSkipped[i] {
+					t.Errorf("skipped[%d] = %d, want %d", i, idx, tt.expectedSkipped[i])
+				}
+			}
+		})
+	}
+}
+
 func TestCollectIndexedPorts(t *testing.T) {
 	// Test that we correctly extract indices from label maps
 	tests := []struct {
