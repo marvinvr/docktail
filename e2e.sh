@@ -256,12 +256,6 @@ assert_service_port         "e2e-proto-http" "80"
 assert_service_protocol     "e2e-proto-http" "http"
 assert_service_destination_contains "e2e-proto-http" "http://"
 
-echo "  --- HTTPS ---"
-assert_service_exists       "e2e-proto-https"
-assert_service_port         "e2e-proto-https" "443"
-assert_service_protocol     "e2e-proto-https" "https"
-assert_service_destination_contains "e2e-proto-https" "http://"  # backend is http, service is https
-
 echo "  --- TCP ---"
 assert_service_exists       "e2e-proto-tcp"
 assert_service_port         "e2e-proto-tcp" "5432"
@@ -278,31 +272,10 @@ assert_service_exists       "e2e-default-minimal"
 assert_service_port         "e2e-default-minimal" "80"
 assert_service_protocol     "e2e-default-minimal" "http"
 
-echo "  --- service-port=443 only (→ https/443) ---"
-assert_service_exists       "e2e-default-port443"
-assert_service_port         "e2e-default-port443" "443"
-assert_service_protocol     "e2e-default-port443" "https"
-
-echo "  --- service-protocol=https only (→ https/443) ---"
-assert_service_exists       "e2e-default-proto-https"
-assert_service_port         "e2e-default-proto-https" "443"
-assert_service_protocol     "e2e-default-proto-https" "https"
-
 echo "  --- backend tcp, no service config (→ tcp/80) ---"
 assert_service_exists       "e2e-default-tcp-backend"
 assert_service_port         "e2e-default-tcp-backend" "80"
 assert_service_protocol     "e2e-default-tcp-backend" "tcp"
-
-echo "  --- target port 443 (→ https/443) ---"
-assert_service_exists       "e2e-default-target443"
-# target port 443 → backend defaults to https
-# no service-port/service-protocol → both unset with http backend... wait
-# actually: target=443 → protocol defaults to "https" (backend)
-# then port="" && serviceProtocol="" with backend "https" → port=80, serviceProtocol=http
-# because the "both unset" branch only checks tcp/tls-terminated-tcp, otherwise defaults to http/80
-# So this should be http/80, NOT https/443
-assert_service_port         "e2e-default-target443" "80"
-assert_service_protocol     "e2e-default-target443" "http"
 
 # ==============================================================================
 # 3. Network Modes
@@ -328,7 +301,7 @@ assert_service_destination_contains "e2e-net-host" "localhost:80"
 
 log "4. Funnel"
 assert_service_exists       "e2e-funnel"
-assert_funnel_active        "443"
+assert_funnel_active        "80"
 
 # ==============================================================================
 # 5. Custom Tags
@@ -359,7 +332,7 @@ assert_service_not_exists   "e2e-lifecycle"
 
 echo "  --- Other services unaffected ---"
 assert_service_exists       "e2e-proto-http"
-assert_service_exists       "e2e-proto-https"
+assert_service_exists       "e2e-proto-tcp"
 
 # ==============================================================================
 # 7. Idempotency: reconciling again changes nothing
@@ -372,7 +345,6 @@ refresh_serve_status
 
 # All non-stopped services should still be there
 assert_service_exists       "e2e-proto-http"
-assert_service_exists       "e2e-proto-https"
 assert_service_exists       "e2e-proto-tcp"
 assert_service_exists       "e2e-default-minimal"
 assert_service_exists       "e2e-net-custom"

@@ -161,7 +161,7 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 				Str("service", serviceName).
 				Msg("Retrying add after clearing conflicting config")
 
-			retryCmd := exec.CommandContext(ctx, "tailscale", "serve", "--bg", serviceArg, portArg, destination)
+			retryCmd := exec.CommandContext(ctx, "tailscale", "serve", serviceArg, portArg, destination)
 			retryOutput, retryErr := retryCmd.CombinedOutput()
 			if retryErr != nil {
 				return fmt.Errorf("failed to add service after clearing: %w\nOutput: %s", retryErr, string(retryOutput))
