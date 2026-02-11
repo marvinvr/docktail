@@ -63,6 +63,19 @@ services:
       - "docktail.service.service-port=80"
       - "docktail.service.service-protocol=http"
 
+  # HTTPS service protocol
+  test-proto-https:
+    image: nginx:alpine
+    container_name: e2e-proto-https
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-proto-https"
+      - "docktail.service.port=80"
+      - "docktail.service.protocol=http"
+      - "docktail.service.service-port=443"
+      - "docktail.service.service-protocol=https"
+
   # TCP service protocol
   test-proto-tcp:
     image: nginx:alpine
@@ -89,6 +102,28 @@ services:
       - "docktail.service.enable=true"
       - "docktail.service.name=e2e-default-minimal"
       - "docktail.service.port=80"
+
+  # Only service-port=443 set, no protocol → should default to https
+  test-default-port443:
+    image: nginx:alpine
+    container_name: e2e-default-port443
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-default-port443"
+      - "docktail.service.port=80"
+      - "docktail.service.service-port=443"
+
+  # Only service-protocol=https set, no port → should default to port 443
+  test-default-proto-https:
+    image: nginx:alpine
+    container_name: e2e-default-proto-https
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-default-proto-https"
+      - "docktail.service.port=80"
+      - "docktail.service.service-protocol=https"
 
   # Backend protocol=tcp, no service port/protocol → should default to tcp/80
   test-default-tcp-backend:
@@ -142,8 +177,35 @@ services:
       - "docktail.service.name=e2e-net-host"
       - "docktail.service.port=80"
 
+  # Container port 443, no protocol labels → backend should default to https, service to https/443
+  test-default-target443:
+    image: nginx:alpine
+    container_name: e2e-default-target443
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-default-target443"
+      - "docktail.service.port=443"
+
   # ============================================================================
-  # 4. Custom Tags
+  # 4. Funnel
+  # ============================================================================
+
+  # Service + HTTPS funnel on port 443
+  test-funnel:
+    image: nginx:alpine
+    container_name: e2e-funnel
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-funnel"
+      - "docktail.service.port=80"
+      - "docktail.service.service-port=443"
+      - "docktail.funnel.enable=true"
+      - "docktail.funnel.port=80"
+
+  # ============================================================================
+  # 5. Custom Tags
   # ============================================================================
 
   # Container with custom tags (overrides default)
@@ -158,7 +220,7 @@ services:
       - "docktail.tags=tag:web,tag:production"
 
   # ============================================================================
-  # 5. Lifecycle (used for stop/removal tests)
+  # 6. Lifecycle (used for stop/removal tests)
   # ============================================================================
 
   test-lifecycle:

@@ -163,6 +163,22 @@ assert_service_destination_contains() {
     fi
 }
 
+# Check funnel status
+get_funnel_status() {
+    docker exec "$TS_CONTAINER" tailscale funnel status --json 2>/dev/null || echo "{}"
+}
+
+assert_funnel_active() {
+    local port="$1"
+    local funnel_status
+    funnel_status=$(get_funnel_status)
+    if echo "$funnel_status" | jq -e ".AllowFunnel | to_entries[] | select(.key | endswith(\":$port\"))" >/dev/null 2>&1; then
+        pass "funnel active on port $port"
+    else
+        fail "funnel not found on port $port"
+    fi
+}
+
 # ==============================================================================
 # Start the stack
 # ==============================================================================
@@ -215,6 +231,12 @@ assert_service_port         "e2e-proto-http" "80"
 assert_service_protocol     "e2e-proto-http" "http"
 assert_service_destination_contains "e2e-proto-http" "http://"
 
+echo "  --- HTTPS ---"
+assert_service_exists       "e2e-proto-https"
+assert_service_port         "e2e-proto-https" "443"
+assert_service_protocol     "e2e-proto-https" "https"
+assert_service_destination_contains "e2e-proto-https" "http://"  # backend is http, service is https
+
 echo "  --- TCP ---"
 assert_service_exists       "e2e-proto-tcp"
 assert_service_port         "e2e-proto-tcp" "5432"
@@ -230,6 +252,16 @@ echo "  --- Minimal (→ http/80) ---"
 assert_service_exists       "e2e-default-minimal"
 assert_service_port         "e2e-default-minimal" "80"
 assert_service_protocol     "e2e-default-minimal" "http"
+
+echo "  --- service-port=443 only (→ https/443) ---"
+assert_service_exists       "e2e-default-port443"
+assert_service_port         "e2e-default-port443" "443"
+assert_service_protocol     "e2e-default-port443" "https"
+
+echo "  --- service-protocol=https only (→ https/443) ---"
+assert_service_exists       "e2e-default-proto-https"
+assert_service_port         "e2e-default-proto-https" "443"
+assert_service_protocol     "e2e-default-proto-https" "https"
 
 echo "  --- backend tcp, no service config (→ tcp/80) ---"
 assert_service_exists       "e2e-default-tcp-backend"
@@ -254,20 +286,33 @@ echo "  --- Host networking ---"
 assert_service_exists       "e2e-net-host"
 assert_service_destination_contains "e2e-net-host" "localhost:80"
 
+echo "  --- target port 443 (→ http/80) ---"
+assert_service_exists       "e2e-default-target443"
+assert_service_port         "e2e-default-target443" "80"
+assert_service_protocol     "e2e-default-target443" "http"
+
 # ==============================================================================
-# 4. Custom Tags
+# 4. Funnel
 # ==============================================================================
 
-log "4. Custom Tags"
+log "4. Funnel"
+assert_service_exists       "e2e-funnel"
+assert_funnel_active        "443"
+
+# ==============================================================================
+# 5. Custom Tags
+# ==============================================================================
+
+log "5. Custom Tags"
 # Tags aren't in serve status, but we verify the service was created
 # (tag validation would need API access)
 assert_service_exists       "e2e-custom-tags"
 
 # ==============================================================================
-# 5. Lifecycle: service removal on container stop
+# 6. Lifecycle: service removal on container stop
 # ==============================================================================
 
-log "5. Lifecycle"
+log "6. Lifecycle"
 
 echo "  --- Pre-check: lifecycle service exists ---"
 assert_service_exists       "e2e-lifecycle"
@@ -283,29 +328,30 @@ assert_service_not_exists   "e2e-lifecycle"
 
 echo "  --- Other services unaffected ---"
 assert_service_exists       "e2e-proto-http"
-assert_service_exists       "e2e-proto-tcp"
+assert_service_exists       "e2e-proto-https"
 
 # ==============================================================================
-# 6. Idempotency: reconciling again changes nothing
+# 7. Idempotency: reconciling again changes nothing
 # ==============================================================================
 
-log "6. Idempotency"
+log "7. Idempotency"
 echo "  Waiting for another reconciliation cycle..."
 sleep "$RECONCILE_WAIT"
 refresh_serve_status
 
 # All non-stopped services should still be there
 assert_service_exists       "e2e-proto-http"
+assert_service_exists       "e2e-proto-https"
 assert_service_exists       "e2e-proto-tcp"
 assert_service_exists       "e2e-default-minimal"
 assert_service_exists       "e2e-net-custom"
 assert_service_not_exists   "e2e-lifecycle"  # still removed
 
 # ==============================================================================
-# 7. Log Health
+# 8. Log Health
 # ==============================================================================
 
-log "7. DockTail Log Health"
+log "8. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if echo "$docktail_logs" | grep -qE "FATAL|panic"; then
