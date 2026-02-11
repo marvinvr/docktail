@@ -378,7 +378,10 @@ func TestCollectIndexedPorts(t *testing.T) {
 			indices := map[int]bool{}
 			for key := range tt.labels {
 				if matches := indexedPortRegex.FindStringSubmatch(key); matches != nil {
-					idx, _ := strconv.Atoi(matches[1])
+					idx, err := strconv.Atoi(matches[1])
+					if err != nil {
+						continue
+					}
 					indices[idx] = true
 				}
 			}
