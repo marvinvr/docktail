@@ -4,6 +4,10 @@ on:
   pull_request:
     branches:
       - main
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
   build:
@@ -22,6 +26,9 @@ jobs:
 
       - name: Vet
         run: go vet ./...
+
+      - name: Test
+        run: go test -v -race ./...
 
       - name: Check formatting
         run: |
@@ -60,3 +67,20 @@ jobs:
 
       - name: Build Docker image
         run: docker build .
+
+  e2e:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Pull test image
+        run: docker pull nginx:alpine
+
+      - name: Run E2E tests
+        run: ./e2e.sh
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_CLIENT_SECRET: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          TS_TAILNET: ${{ secrets.TS_TAILNET }}
