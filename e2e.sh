@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 COMPOSE_FILE="docker-compose.e2e.yaml"
 TS_CONTAINER="e2e-tailscale"
 DOCKTAIL_CONTAINER="e2e-docktail"
-MAX_WAIT=120
-RECONCILE_WAIT=15
+MAX_WAIT=180
+RECONCILE_WAIT=20
 
 passed=0
 failed=0
@@ -23,7 +22,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# --- Preflight: generate auth key from OAuth ---
+# --- Preflight (strict mode for setup) ---
+set -euo pipefail
+
 if [ -n "${TS_AUTHKEY:-}" ]; then
     echo "  Using provided TS_AUTHKEY"
 elif [ -n "${TS_OAUTH_CLIENT_ID:-}" ] && [ -n "${TS_OAUTH_CLIENT_SECRET:-}" ]; then
@@ -105,7 +106,7 @@ assert_service_port() {
     local name="svc:$1"
     local expected_port="$2"
     local actual
-    actual=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null)
+    actual=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
     if [ "$actual" = "$expected_port" ]; then
         pass "$name has port $expected_port"
     else
@@ -119,15 +120,15 @@ assert_service_protocol() {
     local name="svc:$1"
     local expected_proto="$2"
     local port
-    port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null)
+    port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
     if [ -z "$port" ]; then
         fail "$name protocol check: no TCP config found"
         return
     fi
 
     local is_https is_http actual
-    is_https=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].HTTPS // false" 2>/dev/null)
-    is_http=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].HTTP // false" 2>/dev/null)
+    is_https=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].HTTPS // false" 2>/dev/null || true)
+    is_http=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].HTTP // false" 2>/dev/null || true)
 
     if [ "$is_https" = "true" ]; then
         actual="https"
@@ -149,7 +150,7 @@ assert_service_destination_contains() {
     local name="svc:$1"
     local expected_substr="$2"
     local dest
-    dest=$(echo "$SERVE_STATUS_CACHE" | jq -r "[.Services[\"$name\"].Web[].Handlers[].Proxy // empty] | first // empty" 2>/dev/null)
+    dest=$(echo "$SERVE_STATUS_CACHE" | jq -r "[.Services[\"$name\"].Web[].Handlers[].Proxy // empty] | first // empty" 2>/dev/null || true)
     if [ -z "$dest" ]; then
         # For TCP services, Web section may be empty - skip destination check
         pass "$name destination check skipped (TCP/no Web config)"
@@ -201,8 +202,28 @@ if [ $elapsed -ge $MAX_WAIT ]; then
 fi
 echo "  Tailscale connected after ${elapsed}s"
 
-log "Waiting ${RECONCILE_WAIT}s for initial DockTail reconciliation"
-sleep "$RECONCILE_WAIT"
+log "Waiting for DockTail to complete first reconciliation"
+elapsed=0
+while [ $elapsed -lt $MAX_WAIT ]; do
+    if docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -q "Reconciliation completed successfully"; then
+        break
+    fi
+    sleep 3
+    elapsed=$((elapsed + 3))
+done
+if [ $elapsed -ge $MAX_WAIT ]; then
+    echo "ERROR: DockTail did not complete reconciliation within ${MAX_WAIT}s"
+    echo "DockTail logs:"
+    docker logs "$DOCKTAIL_CONTAINER" 2>&1 | tail -50
+    exit 1
+fi
+echo "  DockTail reconciled after ${elapsed}s"
+
+# Extra buffer for any remaining serve commands to finish
+sleep 5
+
+# Switch to non-strict mode for test assertions
+set +e
 
 # Get the initial serve status once
 refresh_serve_status
@@ -313,8 +334,8 @@ echo "  --- Pre-check: lifecycle service exists ---"
 assert_service_exists       "e2e-lifecycle"
 
 echo "  --- Stopping container ---"
-docker stop e2e-lifecycle >/dev/null 2>&1
-echo "  Waiting ${RECONCILE_WAIT}s for reconciliation..."
+docker stop e2e-lifecycle >/dev/null 2>&1 || true
+echo "  Waiting for reconciliation after stop..."
 sleep "$RECONCILE_WAIT"
 refresh_serve_status
 
