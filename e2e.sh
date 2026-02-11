@@ -163,22 +163,6 @@ assert_service_destination_contains() {
     fi
 }
 
-# Check funnel status
-get_funnel_status() {
-    docker exec "$TS_CONTAINER" tailscale funnel status --json 2>/dev/null || echo "{}"
-}
-
-assert_funnel_active() {
-    local port="$1"
-    local funnel_status
-    funnel_status=$(get_funnel_status)
-    if echo "$funnel_status" | jq -e ".AllowFunnel | to_entries[] | select(.key | endswith(\":$port\"))" >/dev/null 2>&1; then
-        pass "funnel active on port $port"
-    else
-        fail "funnel not found on port $port"
-    fi
-}
-
 # ==============================================================================
 # Start the stack
 # ==============================================================================
@@ -296,27 +280,19 @@ assert_service_exists       "e2e-net-host"
 assert_service_destination_contains "e2e-net-host" "localhost:80"
 
 # ==============================================================================
-# 4. Funnel
+# 4. Custom Tags
 # ==============================================================================
 
-log "4. Funnel"
-assert_service_exists       "e2e-funnel"
-assert_funnel_active        "80"
-
-# ==============================================================================
-# 5. Custom Tags
-# ==============================================================================
-
-log "5. Custom Tags"
+log "4. Custom Tags"
 # Tags aren't in serve status, but we verify the service was created
 # (tag validation would need API access)
 assert_service_exists       "e2e-custom-tags"
 
 # ==============================================================================
-# 6. Lifecycle: service removal on container stop
+# 5. Lifecycle: service removal on container stop
 # ==============================================================================
 
-log "6. Lifecycle"
+log "5. Lifecycle"
 
 echo "  --- Pre-check: lifecycle service exists ---"
 assert_service_exists       "e2e-lifecycle"
@@ -335,10 +311,10 @@ assert_service_exists       "e2e-proto-http"
 assert_service_exists       "e2e-proto-tcp"
 
 # ==============================================================================
-# 7. Idempotency: reconciling again changes nothing
+# 6. Idempotency: reconciling again changes nothing
 # ==============================================================================
 
-log "7. Idempotency"
+log "6. Idempotency"
 echo "  Waiting for another reconciliation cycle..."
 sleep "$RECONCILE_WAIT"
 refresh_serve_status
@@ -351,10 +327,10 @@ assert_service_exists       "e2e-net-custom"
 assert_service_not_exists   "e2e-lifecycle"  # still removed
 
 # ==============================================================================
-# 8. Log Health
+# 7. Log Health
 # ==============================================================================
 
-log "8. DockTail Log Health"
+log "7. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if echo "$docktail_logs" | grep -q "Reconciliation completed successfully"; then

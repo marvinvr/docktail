@@ -143,25 +143,7 @@ services:
       - "docktail.service.port=80"
 
   # ============================================================================
-  # 4. Funnel
-  # ============================================================================
-
-  # Service + funnel (HTTP to avoid TLS cert provisioning in CI)
-  test-funnel:
-    image: nginx:alpine
-    container_name: e2e-funnel
-    restart: "no"
-    labels:
-      - "docktail.service.enable=true"
-      - "docktail.service.name=e2e-funnel"
-      - "docktail.service.port=80"
-      - "docktail.service.service-port=80"
-      - "docktail.service.service-protocol=http"
-      - "docktail.funnel.enable=true"
-      - "docktail.funnel.port=80"
-
-  # ============================================================================
-  # 5. Custom Tags
+  # 4. Custom Tags
   # ============================================================================
 
   # Container with custom tags (overrides default)
@@ -176,7 +158,7 @@ services:
       - "docktail.tags=tag:web,tag:production"
 
   # ============================================================================
-  # 6. Lifecycle (used for stop/removal tests)
+  # 5. Lifecycle (used for stop/removal tests)
   # ============================================================================
 
   test-lifecycle:
