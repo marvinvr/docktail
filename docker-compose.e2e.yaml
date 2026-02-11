@@ -232,6 +232,30 @@ services:
       - "docktail.service.name=e2e-lifecycle"
       - "docktail.service.port=80"
 
+  # ============================================================================
+  # 7. Ignored Container (no docktail labels)
+  # ============================================================================
+
+  test-ignored:
+    image: nginx:alpine
+    container_name: e2e-ignored
+    restart: "no"
+
+  # ============================================================================
+  # 8. Update/Change (starts as HTTP, switched to HTTPS mid-test)
+  # ============================================================================
+
+  test-update:
+    image: nginx:alpine
+    container_name: e2e-update
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-update"
+      - "docktail.service.port=80"
+      - "docktail.service.service-port=80"
+      - "docktail.service.service-protocol=http"
+
 networks:
   backend:
 

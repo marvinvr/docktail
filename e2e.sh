@@ -5,6 +5,11 @@ TS_CONTAINER="e2e-tailscale"
 DOCKTAIL_CONTAINER="e2e-docktail"
 MAX_WAIT=120
 RECONCILE_WAIT=10
+SCRIPT_TIMEOUT=600
+
+# Kill the script if it runs longer than SCRIPT_TIMEOUT seconds
+( sleep "$SCRIPT_TIMEOUT" && echo "ERROR: E2E script timed out after ${SCRIPT_TIMEOUT}s" && kill $$ ) 2>/dev/null &
+TIMEOUT_PID=$!
 
 passed=0
 failed=0
@@ -18,6 +23,7 @@ fail() { echo "  FAIL: $1"; failed=$((failed + 1)); errors="${errors}\n  - $1"; 
 # --- Cleanup ---
 cleanup() {
     log "Cleaning up"
+    kill "$TIMEOUT_PID" 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -309,10 +315,17 @@ log "5. Custom Tags"
 assert_service_exists       "e2e-custom-tags"
 
 # ==============================================================================
-# 6. Lifecycle: service removal on container stop
+# 6. Ignored Container (no docktail labels)
 # ==============================================================================
 
-log "6. Lifecycle"
+log "6. Ignored Container"
+assert_service_not_exists   "e2e-ignored"
+
+# ==============================================================================
+# 7. Lifecycle: service removal on container stop
+# ==============================================================================
+
+log "7. Lifecycle"
 
 echo "  --- Pre-check: lifecycle service exists ---"
 assert_service_exists       "e2e-lifecycle"
@@ -331,10 +344,43 @@ assert_service_exists       "e2e-proto-http"
 assert_service_exists       "e2e-proto-https"
 
 # ==============================================================================
-# 7. Idempotency: reconciling again changes nothing
+# 8. Service Update: change protocol from HTTP to HTTPS
 # ==============================================================================
 
-log "7. Idempotency"
+log "8. Service Update"
+
+echo "  --- Pre-check: update service is HTTP/80 ---"
+assert_service_exists       "e2e-update"
+assert_service_port         "e2e-update" "80"
+assert_service_protocol     "e2e-update" "http"
+
+echo "  --- Recreating container with HTTPS labels ---"
+docker stop e2e-update >/dev/null 2>&1 || true
+docker rm e2e-update >/dev/null 2>&1 || true
+docker run -d \
+    --name e2e-update \
+    --restart no \
+    --label "docktail.service.enable=true" \
+    --label "docktail.service.name=e2e-update" \
+    --label "docktail.service.port=80" \
+    --label "docktail.service.service-port=443" \
+    --label "docktail.service.service-protocol=https" \
+    nginx:alpine >/dev/null 2>&1
+
+echo "  Waiting for reconciliation after update..."
+sleep "$RECONCILE_WAIT"
+refresh_serve_status
+
+echo "  --- Post-update: service should be HTTPS/443 ---"
+assert_service_exists       "e2e-update"
+assert_service_port         "e2e-update" "443"
+assert_service_protocol     "e2e-update" "https"
+
+# ==============================================================================
+# 9. Idempotency: reconciling again changes nothing
+# ==============================================================================
+
+log "9. Idempotency"
 echo "  Waiting for another reconciliation cycle..."
 sleep "$RECONCILE_WAIT"
 refresh_serve_status
@@ -346,12 +392,13 @@ assert_service_exists       "e2e-proto-tcp"
 assert_service_exists       "e2e-default-minimal"
 assert_service_exists       "e2e-net-custom"
 assert_service_not_exists   "e2e-lifecycle"  # still removed
+assert_service_not_exists   "e2e-ignored"    # still ignored
 
 # ==============================================================================
-# 8. Log Health
+# 10. Log Health
 # ==============================================================================
 
-log "8. DockTail Log Health"
+log "10. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if echo "$docktail_logs" | grep -qE "FATAL|panic"; then
