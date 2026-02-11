@@ -202,7 +202,11 @@ if [ $elapsed -ge $MAX_WAIT ]; then
 fi
 echo "  Tailscale connected after ${elapsed}s"
 
-log "Waiting for DockTail to complete first reconciliation"
+log "Tailing DockTail logs (waiting for first successful reconciliation)"
+# Stream DockTail logs in the background so CI output shows what's happening
+docker logs -f "$DOCKTAIL_CONTAINER" 2>&1 &
+LOGS_PID=$!
+
 elapsed=0
 while [ $elapsed -lt $MAX_WAIT ]; do
     if docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -q "Reconciliation completed successfully"; then
@@ -211,10 +215,14 @@ while [ $elapsed -lt $MAX_WAIT ]; do
     sleep 3
     elapsed=$((elapsed + 3))
 done
+
+# Stop the log tail
+kill $LOGS_PID 2>/dev/null || true
+wait $LOGS_PID 2>/dev/null || true
+echo ""
+
 if [ $elapsed -ge $MAX_WAIT ]; then
     echo "ERROR: DockTail did not complete reconciliation within ${MAX_WAIT}s"
-    echo "DockTail logs:"
-    docker logs "$DOCKTAIL_CONTAINER" 2>&1 | tail -50
     exit 1
 fi
 echo "  DockTail reconciled after ${elapsed}s"
