@@ -222,7 +222,7 @@ echo "  DockTail reconciled after ${elapsed}s"
 sleep 5
 
 # Switch to non-strict mode for test assertions
-set +e
+set +eo pipefail
 
 # Get the initial serve status once
 refresh_serve_status
