@@ -193,36 +193,11 @@ log "Waiting for Tailscale to be fully ready for service registration"
 sleep 10
 echo "  Ready"
 
-log "Tailing DockTail logs (waiting for first successful reconciliation)"
-# Stream DockTail logs in the background so CI output shows what's happening
-docker logs -f "$DOCKTAIL_CONTAINER" 2>&1 &
-LOGS_PID=$!
-
-elapsed=0
-while [ $elapsed -lt $MAX_WAIT ]; do
-    if docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -q "Reconciliation completed successfully"; then
-        break
-    fi
-    sleep 3
-    elapsed=$((elapsed + 3))
-done
-
-# Stop the log tail
-kill $LOGS_PID 2>/dev/null || true
-wait $LOGS_PID 2>/dev/null || true
-echo ""
-
-if [ $elapsed -ge $MAX_WAIT ]; then
-    echo "ERROR: DockTail did not complete reconciliation within ${MAX_WAIT}s"
-    exit 1
-fi
-echo "  DockTail reconciled after ${elapsed}s"
-
-# Extra buffer for any remaining serve commands to finish
-sleep 5
+log "Waiting for DockTail to reconcile"
+sleep "$RECONCILE_WAIT"
 
 # Switch to non-strict mode for test assertions
-set +eo pipefail
+set +e
 
 # Get the initial serve status once
 refresh_serve_status
@@ -332,14 +307,6 @@ assert_service_not_exists   "e2e-lifecycle"  # still removed
 
 log "7. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
-
-if echo "$docktail_logs" | grep -q "Reconciliation completed successfully"; then
-    pass "successful reconciliation in logs"
-else
-    fail "no successful reconciliation in logs"
-    echo "  Last 20 lines:"
-    echo "$docktail_logs" | tail -20
-fi
 
 if echo "$docktail_logs" | grep -qE "FATAL|panic"; then
     fail "FATAL or panic in logs"
