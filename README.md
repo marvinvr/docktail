@@ -193,6 +193,14 @@ ports:
 - \** `service-port`: `443` if service-protocol is `https`, otherwise `80`
 - \*** `service-protocol`: `https` if service-port is 443, matches `protocol` for TCP, otherwise `http`
 
+**Label Naming Constraints:**
+Service names and labels have specific character restrictions based on Tailscale's requirements:
+- **Underscores (`_`) are NOT allowed** in service names (`docktail.service.name`)
+- Service names must be valid DNS labels: lowercase alphanumeric characters and hyphens only
+- Service names cannot start or end with a hyphen
+- Examples of valid names: `web`, `api-server`, `my-app`
+- Examples of invalid names: `web_server`, `_api`, `api-`, `my.app`
+
 ### Funnel Labels (Public Internet Access)
 
 Funnel exposes your service to the **public internet**. Independent from service labels.
@@ -207,6 +215,12 @@ Funnel exposes your service to the **public internet**. Independent from service
 **Notes:**
 - Only ONE funnel per port (Tailscale limitation)
 - Uses machine hostname, not service name: `https://<machine>.<tailnet>.ts.net`
+
+**Label Naming Constraints:**
+Funnel labels follow the same naming constraints as service labels:
+- **Underscores (`_`) are NOT allowed** in any label values
+- All label values must conform to Tailscale's naming requirements (lowercase alphanumeric characters and hyphens only)
+- Invalid characters in labels may cause configuration failures
 
 ## Examples
 
