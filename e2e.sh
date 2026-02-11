@@ -3,7 +3,7 @@
 COMPOSE_FILE="docker-compose.e2e.yaml"
 TS_CONTAINER="e2e-tailscale"
 DOCKTAIL_CONTAINER="e2e-docktail"
-MAX_WAIT=180
+MAX_WAIT=30
 RECONCILE_WAIT=20
 
 passed=0
@@ -386,7 +386,7 @@ else
     echo "$docktail_logs" | tail -20
 fi
 
-if echo "$docktail_logs" | grep -q "FATAL\|panic"; then
+if echo "$docktail_logs" | grep -qE "FATAL|panic"; then
     fail "FATAL or panic in logs"
 else
     pass "no FATAL or panic in logs"
