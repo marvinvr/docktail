@@ -220,7 +220,44 @@ services:
       - "docktail.tags=tag:web,tag:production"
 
   # ============================================================================
-  # 6. Lifecycle (used for stop/removal tests)
+  # 6. Multiple Ports
+  # ============================================================================
+
+  # Container exposing two ports: primary HTTPS/443 and indexed HTTP/8080
+  test-multiport:
+    image: nginx:alpine
+    container_name: e2e-multiport
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-multiport"
+      - "docktail.service.port=80"
+      - "docktail.service.service-port=443"
+      - "docktail.service.service-protocol=https"
+      - "docktail.service.1.port=80"
+      - "docktail.service.1.service-port=8080"
+      - "docktail.service.1.service-protocol=http"
+
+  # Container with three ports: primary + two indexed, non-contiguous indices
+  test-multiport-three:
+    image: nginx:alpine
+    container_name: e2e-multiport-three
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-multiport-three"
+      - "docktail.service.port=80"
+      - "docktail.service.service-port=443"
+      - "docktail.service.service-protocol=https"
+      - "docktail.service.1.port=80"
+      - "docktail.service.1.service-port=3000"
+      - "docktail.service.1.service-protocol=http"
+      - "docktail.service.3.port=80"
+      - "docktail.service.3.service-port=5000"
+      - "docktail.service.3.service-protocol=http"
+
+  # ============================================================================
+  # 7. Lifecycle (used for stop/removal tests)
   # ============================================================================
 
   test-lifecycle:
@@ -233,7 +270,7 @@ services:
       - "docktail.service.port=80"
 
   # ============================================================================
-  # 7. Ignored Container (no docktail labels)
+  # 8. Ignored Container (no docktail labels)
   # ============================================================================
 
   test-ignored:
@@ -242,7 +279,7 @@ services:
     restart: "no"
 
   # ============================================================================
-  # 8. Update/Change (starts as HTTP, switched to HTTPS mid-test)
+  # 9. Update/Change (starts as HTTP, switched to HTTPS mid-test)
   # ============================================================================
 
   test-update:

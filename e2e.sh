@@ -120,6 +120,32 @@ assert_service_port() {
     fi
 }
 
+# Check that a service has a specific port anywhere in its TCP config (multi-port aware)
+assert_service_has_port() {
+    local name="svc:$1"
+    local expected_port="$2"
+    if echo "$SERVE_STATUS_CACHE" | jq -e ".Services[\"$name\"].TCP[\"$expected_port\"]" >/dev/null 2>&1; then
+        pass "$name has port $expected_port"
+    else
+        local actual_ports
+        actual_ports=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys | join(\", \")" 2>/dev/null || echo "<none>")
+        fail "$name expected port $expected_port, available ports: $actual_ports"
+    fi
+}
+
+# Check the total number of TCP ports on a service
+assert_service_port_count() {
+    local name="svc:$1"
+    local expected_count="$2"
+    local actual_count
+    actual_count=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys | length" 2>/dev/null || echo "0")
+    if [ "$actual_count" = "$expected_count" ]; then
+        pass "$name has $expected_count port(s)"
+    else
+        fail "$name expected $expected_count port(s), got $actual_count"
+    fi
+}
+
 # Check service protocol via TCP config flags
 # "http" = HTTP:true, "https" = HTTPS:true, "tcp" = neither
 assert_service_protocol() {
@@ -315,17 +341,36 @@ log "5. Custom Tags"
 assert_service_exists       "e2e-custom-tags"
 
 # ==============================================================================
-# 6. Ignored Container (no docktail labels)
+# 6. Multiple Ports
 # ==============================================================================
 
-log "6. Ignored Container"
+log "6. Multiple Ports"
+
+echo "  --- Two ports (primary HTTPS/443 + indexed HTTP/8080) ---"
+assert_service_exists       "e2e-multiport"
+assert_service_has_port     "e2e-multiport" "443"
+assert_service_has_port     "e2e-multiport" "8080"
+assert_service_port_count   "e2e-multiport" "2"
+
+echo "  --- Three ports (primary + two non-contiguous indexed) ---"
+assert_service_exists       "e2e-multiport-three"
+assert_service_has_port     "e2e-multiport-three" "443"
+assert_service_has_port     "e2e-multiport-three" "3000"
+assert_service_has_port     "e2e-multiport-three" "5000"
+assert_service_port_count   "e2e-multiport-three" "3"
+
+# ==============================================================================
+# 7. Ignored Container (no docktail labels)
+# ==============================================================================
+
+log "7. Ignored Container"
 assert_service_not_exists   "e2e-ignored"
 
 # ==============================================================================
-# 7. Lifecycle: service removal on container stop
+# 8. Lifecycle: service removal on container stop
 # ==============================================================================
 
-log "7. Lifecycle"
+log "8. Lifecycle"
 
 echo "  --- Pre-check: lifecycle service exists ---"
 assert_service_exists       "e2e-lifecycle"
@@ -344,10 +389,10 @@ assert_service_exists       "e2e-proto-http"
 assert_service_exists       "e2e-proto-https"
 
 # ==============================================================================
-# 8. Service Update: change protocol from HTTP to HTTPS
+# 9. Service Update: change protocol from HTTP to HTTPS
 # ==============================================================================
 
-log "8. Service Update"
+log "9. Service Update"
 
 echo "  --- Pre-check: update service is HTTP/80 ---"
 assert_service_exists       "e2e-update"
@@ -377,10 +422,10 @@ assert_service_port         "e2e-update" "443"
 assert_service_protocol     "e2e-update" "https"
 
 # ==============================================================================
-# 9. Idempotency: reconciling again changes nothing
+# 10. Idempotency: reconciling again changes nothing
 # ==============================================================================
 
-log "9. Idempotency"
+log "10. Idempotency"
 echo "  Waiting for another reconciliation cycle..."
 sleep "$RECONCILE_WAIT"
 refresh_serve_status
@@ -391,14 +436,16 @@ assert_service_exists       "e2e-proto-https"
 assert_service_exists       "e2e-proto-tcp"
 assert_service_exists       "e2e-default-minimal"
 assert_service_exists       "e2e-net-custom"
+assert_service_exists       "e2e-multiport"
+assert_service_exists       "e2e-multiport-three"
 assert_service_not_exists   "e2e-lifecycle"  # still removed
 assert_service_not_exists   "e2e-ignored"    # still ignored
 
 # ==============================================================================
-# 10. Log Health
+# 11. Log Health
 # ==============================================================================
 
-log "10. DockTail Log Health"
+log "11. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if echo "$docktail_logs" | grep -qE "FATAL|panic"; then

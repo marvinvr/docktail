@@ -15,6 +15,7 @@ Automatically expose Docker containers as Tailscale Services using label-based c
 - [x] HTTP, HTTPS and TCP protocols
 - [x] Tailscale HTTPS with automatic TLS certificates
 - [x] Tailscale Funnel support (public internet access)
+- [x] Multiple ports per container
 - [x] Automatic cleanup when containers stop
 - [x] Runs entirely in a **stateless Docker container**
 
@@ -300,6 +301,24 @@ services:
       - "docktail.service.protocol=tcp"
       - "docktail.service.service-port=5432"
 ```
+
+### Multiple Ports
+
+```yaml
+services:
+  fullstack:
+    image: myapp:latest
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=myapp"
+      - "docktail.service.port=8080"
+      - "docktail.service.service-port=443"
+      - "docktail.service.1.port=3000"
+      - "docktail.service.1.service-port=3000"
+      - "docktail.service.1.service-protocol=http"
+```
+
+Additional ports use numbered labels (`docktail.service.N.*`) and inherit the service name, tags, and network from the primary config. Per-port overridable labels are `port`, `service-port`, `protocol`, and `service-protocol`.
 
 ### Custom Docker Network
 

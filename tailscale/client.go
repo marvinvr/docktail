@@ -276,21 +276,29 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 
 // syncServiceDefinitions syncs all desired services to the Tailscale Control Plane
 func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptypes.ContainerService) error {
-	// Deduplicate by service name - we only need to upsert each service definition once
-	// We also need to capture the port to send to the API
+	// Deduplicate by service name and aggregate all ports per service
 	type serviceDef struct {
-		Tags []string
-		Port string
+		Tags  []string
+		Ports []string
 	}
-	uniqueServices := make(map[string]serviceDef)
+	uniqueServices := make(map[string]*serviceDef)
 
 	for _, svc := range services {
-		// If multiple containers share a service name, we use the tags/port from the last one seen.
-		// In a consistent config, they should be identical.
-		// Note: svc.Port is the "service-port" (Tailscale side), not the container port.
-		uniqueServices[svc.ServiceName] = serviceDef{
-			Tags: svc.Tags,
-			Port: svc.Port,
+		def, exists := uniqueServices[svc.ServiceName]
+		if !exists {
+			def = &serviceDef{Tags: svc.Tags}
+			uniqueServices[svc.ServiceName] = def
+		}
+		// Add port if not already present
+		found := false
+		for _, p := range def.Ports {
+			if p == svc.Port {
+				found = true
+				break
+			}
+		}
+		if !found {
+			def.Ports = append(def.Ports, svc.Port)
 		}
 	}
 
@@ -300,7 +308,7 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 
 	var failed []string
 	for name, def := range uniqueServices {
-		if err := c.SyncServiceDefinition(ctx, name, def.Tags, def.Port); err != nil {
+		if err := c.SyncServiceDefinition(ctx, name, def.Tags, def.Ports); err != nil {
 			failed = append(failed, name)
 			log.Error().
 				Err(err).
@@ -319,7 +327,7 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 
 // SyncServiceDefinition ensures a service definition exists in the Tailscale API.
 // Only creates if the service doesn't exist. Does NOT update existing services.
-func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, tags []string, port string) error {
+func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, tags []string, ports []string) error {
 	if !strings.HasPrefix(serviceName, "svc:") {
 		serviceName = "svc:" + serviceName
 	}
@@ -349,17 +357,20 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 	apiURL := fmt.Sprintf("%s/api/v2/tailnet/%s/services/%s", c.baseURL, url.PathEscape(c.tailnet), url.PathEscape(serviceName))
 
 	// Tailscale API requires "ports" to be present.
-	if port == "" {
-		port = "443"
+	if len(ports) == 0 {
+		ports = []string{"443"}
 	}
 
-	// Tailscale API requires prefix for creation
-	portStr := fmt.Sprintf("tcp:%s", port)
+	// Tailscale API requires "tcp:" prefix for ports
+	portStrs := make([]string, len(ports))
+	for i, p := range ports {
+		portStrs[i] = fmt.Sprintf("tcp:%s", p)
+	}
 
 	payload := map[string]interface{}{
 		"name":  serviceName,
 		"tags":  tags,
-		"ports": []string{portStr},
+		"ports": portStrs,
 	}
 
 	body, err := json.Marshal(payload)
