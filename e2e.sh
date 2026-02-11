@@ -4,7 +4,7 @@ COMPOSE_FILE="docker-compose.e2e.yaml"
 TS_CONTAINER="e2e-tailscale"
 DOCKTAIL_CONTAINER="e2e-docktail"
 MAX_WAIT=120
-RECONCILE_WAIT=20
+RECONCILE_WAIT=10
 
 passed=0
 failed=0
