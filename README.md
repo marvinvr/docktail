@@ -15,7 +15,7 @@ Automatically expose Docker containers as Tailscale Services using label-based c
 - [x] HTTP, HTTPS and TCP protocols
 - [x] Tailscale HTTPS with automatic TLS certificates
 - [x] Tailscale Funnel support (public internet access)
-- [x] Multiple ports per container
+- [x] Multiple services from a single container
 - [x] Automatic cleanup when containers stop
 - [x] Runs entirely in a **stateless Docker container**
 
@@ -302,23 +302,25 @@ services:
       - "docktail.service.service-port=5432"
 ```
 
-### Multiple Ports
+### Multiple Services from One Container
+
+A single container can expose multiple separate Tailscale services using numbered labels (`docktail.service.N.*`). Each indexed entry requires its own `name` and `port`, and becomes an independent service. Tags and network are inherited from the primary config.
+
+This is useful for VPN gateway containers (e.g., gluetun) where multiple apps route through a single container but each needs its own Tailscale service.
 
 ```yaml
 services:
-  fullstack:
-    image: myapp:latest
+  gluetun:
+    image: gluetun:latest
     labels:
       - "docktail.service.enable=true"
-      - "docktail.service.name=myapp"
-      - "docktail.service.port=8080"
-      - "docktail.service.service-port=443"
-      - "docktail.service.1.port=3000"
-      - "docktail.service.1.service-port=3000"
-      - "docktail.service.1.service-protocol=http"
+      - "docktail.service.name=qbittorrent"
+      - "docktail.service.port=8000"
+      - "docktail.service.1.name=bitmagnet"
+      - "docktail.service.1.port=8001"
 ```
 
-Additional ports use numbered labels (`docktail.service.N.*`) and inherit the service name, tags, and network from the primary config. Per-port overridable labels are `port`, `service-port`, `protocol`, and `service-protocol`.
+Per-index overridable labels: `name` (required), `port` (required), `service-port`, `protocol`, and `service-protocol`.
 
 ### Custom Docker Network
 
