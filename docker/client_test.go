@@ -225,82 +225,94 @@ func TestIndexedPortRegex(t *testing.T) {
 }
 
 func TestDuplicateServicePortDetection(t *testing.T) {
-	// Exercises the dedup logic used in parseIndexedPorts: given a primary
-	// service-port and a set of indexed ports that resolve to service-ports,
-	// duplicates should be detected and skipped.
+	// Exercises the dedup logic used in parseIndexedPorts: duplicates are
+	// scoped by service name + port, so different services can use the same port.
 	tests := []struct {
 		name               string
+		primaryServiceName string
 		primaryServicePort string
 		indexedPorts       []struct {
 			index       int
-			servicePort string // resolved service-port for this index
+			serviceName string
+			servicePort string
 		}
 		expectedAccepted []int // indices that should pass dedup
 		expectedSkipped  []int // indices that should be skipped
 	}{
 		{
-			name:               "no duplicates",
+			name:               "no duplicates, different names",
+			primaryServiceName: "primary",
 			primaryServicePort: "443",
 			indexedPorts: []struct {
 				index       int
+				serviceName string
 				servicePort string
 			}{
-				{1, "8080"},
-				{2, "3000"},
+				{1, "svc-a", "8080"},
+				{2, "svc-b", "3000"},
 			},
 			expectedAccepted: []int{1, 2},
 		},
 		{
-			name:               "indexed port duplicates primary",
+			name:               "same name and port as primary is skipped",
+			primaryServiceName: "myapp",
 			primaryServicePort: "80",
 			indexedPorts: []struct {
 				index       int
+				serviceName string
 				servicePort string
 			}{
-				{1, "80"},
-				{2, "3000"},
+				{1, "myapp", "80"},
+				{2, "other", "3000"},
 			},
 			expectedAccepted: []int{2},
 			expectedSkipped:  []int{1},
 		},
 		{
-			name:               "two indexed ports with same service-port",
+			name:               "same port different names is allowed",
+			primaryServiceName: "primary",
 			primaryServicePort: "443",
 			indexedPorts: []struct {
 				index       int
+				serviceName string
 				servicePort string
 			}{
-				{1, "8080"},
-				{2, "8080"},
+				{1, "svc-a", "443"},
+				{2, "svc-b", "443"},
+			},
+			expectedAccepted: []int{1, 2},
+		},
+		{
+			name:               "same name same port across indices is skipped",
+			primaryServiceName: "primary",
+			primaryServicePort: "443",
+			indexedPorts: []struct {
+				index       int
+				serviceName string
+				servicePort string
+			}{
+				{1, "svc-a", "8080"},
+				{2, "svc-a", "8080"},
 			},
 			expectedAccepted: []int{1},
 			expectedSkipped:  []int{2},
-		},
-		{
-			name:               "all three collide",
-			primaryServicePort: "80",
-			indexedPorts: []struct {
-				index       int
-				servicePort string
-			}{
-				{1, "80"},
-				{2, "80"},
-			},
-			expectedSkipped: []int{1, 2},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			usedServicePorts := map[string]int{tt.primaryServicePort: 0}
+			usedServicePorts := map[string]int{
+				tt.primaryServiceName + ":" + tt.primaryServicePort: 0,
+			}
 			var accepted, skipped []int
 
 			for _, ip := range tt.indexedPorts {
-				if _, exists := usedServicePorts[ip.servicePort]; exists {
+				dedupKey := ip.serviceName + ":" + ip.servicePort
+				if _, exists := usedServicePorts[dedupKey]; exists {
 					skipped = append(skipped, ip.index)
 					continue
 				}
-				usedServicePorts[ip.servicePort] = ip.index
+				usedServicePorts[dedupKey] = ip.index
 				accepted = append(accepted, ip.index)
 			}
 

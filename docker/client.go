@@ -21,6 +21,7 @@ import (
 )
 
 // indexedPortRegex matches labels like "docktail.service.1.port", "docktail.service.2.port", etc.
+// Each indexed entry defines a separate Tailscale service (requires docktail.service.N.name).
 var indexedPortRegex = regexp.MustCompile(`^docktail\.service\.(\d+)\.port$`)
 
 // containerCtx holds shared container context used across multi-port parsing.
@@ -464,7 +465,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		FunnelProtocol:   funnelProtocol,
 	}
 
-	// Parse indexed ports (multi-port support)
+	// Parse indexed services (one container can define multiple separate Tailscale services)
 	indexedServices, err := c.parseIndexedPorts(cctx, labels, serviceName, port)
 	if err != nil {
 		return nil, err
@@ -477,12 +478,13 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 	return result, nil
 }
 
-// parseIndexedPorts scans labels for indexed port definitions (docktail.service.N.port)
-// and returns a ContainerService for each valid index.
+// parseIndexedPorts scans labels for indexed service definitions (docktail.service.N.*)
+// and returns a ContainerService for each valid index. Each index defines a separate
+// Tailscale service and requires its own name (docktail.service.N.name).
 func (c *Client) parseIndexedPorts(
 	cctx *containerCtx,
 	labels map[string]string,
-	serviceName string,
+	primaryServiceName string,
 	primaryServicePort string,
 ) ([]*apptypes.ContainerService, error) {
 	// Collect all indices from labels
@@ -510,21 +512,29 @@ func (c *Client) parseIndexedPorts(
 
 	log.Info().
 		Str("container", cctx.containerName).
-		Int("indexed_ports", len(sorted)).
-		Msg("Found indexed port definitions")
+		Int("indexed_services", len(sorted)).
+		Msg("Found indexed service definitions")
 
-	// Track service-ports to detect duplicates
+	// Track service name+port combos to detect duplicates.
+	// Scoped by service name so different services can use the same port.
 	usedServicePorts := map[string]int{}
-	// Primary service-port is already used
-	usedServicePorts[primaryServicePort] = 0
+	usedServicePorts[primaryServiceName+":"+primaryServicePort] = 0
 
 	var services []*apptypes.ContainerService
 	for _, idx := range sorted {
 		prefix := fmt.Sprintf("docktail.service.%d.", idx)
 
+		idxServiceName := labels[prefix+"name"]
+		if idxServiceName == "" {
+			log.Warn().
+				Str("container", cctx.containerName).
+				Int("index", idx).
+				Msg("Missing required name label for indexed service, skipping")
+			continue
+		}
+
 		targetPort := labels[prefix+"port"]
 		if targetPort == "" {
-			// Should not happen since we matched on port label, but be safe
 			continue
 		}
 
@@ -539,22 +549,25 @@ func (c *Client) parseIndexedPorts(
 			log.Warn().
 				Err(err).
 				Str("container", cctx.containerName).
+				Str("service", idxServiceName).
 				Int("index", idx).
-				Msg("Failed to resolve protocols for indexed port, skipping")
+				Msg("Failed to resolve protocols for indexed service, skipping")
 			continue
 		}
 
-		// Check for duplicate service-port
-		if prevIdx, exists := usedServicePorts[servicePort]; exists {
+		// Check for duplicate service name + port combo
+		dedupKey := idxServiceName + ":" + servicePort
+		if prevIdx, exists := usedServicePorts[dedupKey]; exists {
 			log.Warn().
 				Str("container", cctx.containerName).
+				Str("service", idxServiceName).
 				Int("index", idx).
 				Int("conflicts_with", prevIdx).
 				Str("service_port", servicePort).
-				Msg("Duplicate service-port across indices, skipping")
+				Msg("Duplicate service name and port across indices, skipping")
 			continue
 		}
-		usedServicePorts[servicePort] = idx
+		usedServicePorts[dedupKey] = idx
 
 		// Resolve destination port
 		idxDestIP, idxDestPort, err := c.resolveDestPort(cctx, targetPort)
@@ -562,9 +575,10 @@ func (c *Client) parseIndexedPorts(
 			log.Warn().
 				Err(err).
 				Str("container", cctx.containerName).
+				Str("service", idxServiceName).
 				Int("index", idx).
 				Str("target_port", targetPort).
-				Msg("Failed to resolve destination for indexed port, skipping")
+				Msg("Failed to resolve destination for indexed service, skipping")
 			continue
 		}
 
@@ -577,26 +591,27 @@ func (c *Client) parseIndexedPorts(
 		svc := &apptypes.ContainerService{
 			ContainerID:     cctx.containerID[:12],
 			ContainerName:   cctx.containerName,
-			ServiceName:     serviceName,
+			ServiceName:     idxServiceName,
 			Port:            servicePort,
 			TargetPort:      idxDestPort,
 			ServiceProtocol: serviceProtocol,
 			Protocol:        protocol,
 			Tags:            cctx.tags,
 			IPAddress:       idxDestIP,
-			FunnelEnabled:   false, // Indexed ports don't get funnel
+			FunnelEnabled:   false,
 		}
 
 		services = append(services, svc)
 
 		log.Info().
 			Str("container", cctx.containerName).
+			Str("service", idxServiceName).
 			Int("index", idx).
 			Str("target_port", targetPort).
 			Str("service_port", servicePort).
 			Str("service_protocol", serviceProtocol).
 			Str("protocol", protocol).
-			Msg("Parsed indexed port")
+			Msg("Parsed indexed service")
 	}
 
 	return services, nil

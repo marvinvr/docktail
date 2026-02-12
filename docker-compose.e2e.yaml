@@ -220,10 +220,10 @@ services:
       - "docktail.tags=tag:web,tag:production"
 
   # ============================================================================
-  # 6. Multiple Ports
+  # 6. Multiple Services from One Container
   # ============================================================================
 
-  # Container exposing two ports: primary HTTPS/443 and indexed HTTP/8080
+  # Container serving two separate Tailscale services (e.g., VPN gateway scenario)
   test-multiport:
     image: nginx:alpine
     container_name: e2e-multiport
@@ -234,11 +234,12 @@ services:
       - "docktail.service.port=80"
       - "docktail.service.service-port=443"
       - "docktail.service.service-protocol=https"
+      - "docktail.service.1.name=e2e-multiport-secondary"
       - "docktail.service.1.port=80"
       - "docktail.service.1.service-port=8080"
       - "docktail.service.1.service-protocol=http"
 
-  # Container with three ports: primary + two indexed, non-contiguous indices
+  # Container serving three separate Tailscale services, non-contiguous indices
   test-multiport-three:
     image: nginx:alpine
     container_name: e2e-multiport-three
@@ -249,9 +250,11 @@ services:
       - "docktail.service.port=80"
       - "docktail.service.service-port=443"
       - "docktail.service.service-protocol=https"
+      - "docktail.service.1.name=e2e-multiport-three-b"
       - "docktail.service.1.port=80"
       - "docktail.service.1.service-port=3000"
       - "docktail.service.1.service-protocol=http"
+      - "docktail.service.3.name=e2e-multiport-three-c"
       - "docktail.service.3.port=80"
       - "docktail.service.3.service-port=5000"
       - "docktail.service.3.service-protocol=http"

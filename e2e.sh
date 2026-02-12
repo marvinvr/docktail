@@ -348,20 +348,21 @@ assert_service_exists       "e2e-custom-tags"
 # 6. Multiple Ports
 # ==============================================================================
 
-log "6. Multiple Ports"
+log "6. Multiple Services from One Container"
 
-echo "  --- Two ports (primary HTTPS/443 + indexed HTTP/8080) ---"
+echo "  --- Primary service + one indexed service ---"
 assert_service_exists       "e2e-multiport"
 assert_service_has_port     "e2e-multiport" "443"
-assert_service_has_port     "e2e-multiport" "8080"
-assert_service_port_count   "e2e-multiport" "2"
+assert_service_exists       "e2e-multiport-secondary"
+assert_service_has_port     "e2e-multiport-secondary" "8080"
 
-echo "  --- Three ports (primary + two non-contiguous indexed) ---"
+echo "  --- Primary service + two indexed services (non-contiguous) ---"
 assert_service_exists       "e2e-multiport-three"
 assert_service_has_port     "e2e-multiport-three" "443"
-assert_service_has_port     "e2e-multiport-three" "3000"
-assert_service_has_port     "e2e-multiport-three" "5000"
-assert_service_port_count   "e2e-multiport-three" "3"
+assert_service_exists       "e2e-multiport-three-b"
+assert_service_has_port     "e2e-multiport-three-b" "3000"
+assert_service_exists       "e2e-multiport-three-c"
+assert_service_has_port     "e2e-multiport-three-c" "5000"
 
 # ==============================================================================
 # 7. Ignored Container (no docktail labels)
