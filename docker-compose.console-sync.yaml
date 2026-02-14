@@ -13,7 +13,7 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+      - /var/run/tailscale:/var/run/tailscale
     environment:
       - LOG_LEVEL=debug
       - TAILSCALE_TAILNET=${TAILSCALE_TAILNET:-}

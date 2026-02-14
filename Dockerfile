@@ -32,4 +32,7 @@ WORKDIR /app
 # Copy binary from build stage
 COPY --from=builder /build/docktail .
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD tailscale --socket=${TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock} serve status || exit 1
+
 ENTRYPOINT ["/bin/sh", "-c", "sleep 1 && exec /app/docktail"]

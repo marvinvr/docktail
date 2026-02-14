@@ -9,8 +9,8 @@ services:
     volumes:
       # Docker socket for container monitoring
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Tailscale socket for CLI communication
-      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+      # Tailscale socket directory (directory mount survives tailscaled restarts)
+      - /var/run/tailscale:/var/run/tailscale
     environment:
       - LOG_LEVEL=debug
       - RECONCILE_INTERVAL=60s

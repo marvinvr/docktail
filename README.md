@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+      - /var/run/tailscale:/var/run/tailscale
     environment:
       # Optional but recommended - enables auto-service-creation
       - TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}
@@ -112,12 +112,14 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - /var/run/tailscale/tailscaled.sock:/var/run/tailscale/tailscaled.sock
+      - /var/run/tailscale:/var/run/tailscale
     environment:
       # Optional but recommended - enables auto-service-creation
       - TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}
       - TAILSCALE_OAUTH_CLIENT_SECRET=${TAILSCALE_OAUTH_CLIENT_SECRET}
 ```
+
+> **Note:** We mount the `/var/run/tailscale` directory rather than the socket file directly. When `tailscaled` restarts, it recreates the socket with a new inode — a file bind mount would go stale, but a directory mount stays in sync automatically.
 
 **Host tag requirement:** The host machine running Tailscale must advertise a tag that matches your ACL auto-approvers (see [Tailscale Admin Setup](#tailscale-admin-setup)). For example:
 
