@@ -50,6 +50,13 @@ func isManagedService(serviceName string) bool {
 	return strings.HasPrefix(serviceName, "svc:")
 }
 
+// isProtectedService checks if a service is in the protected set
+// Protected services are never removed by DockTail during reconciliation or cleanup
+func (c *Client) isProtectedService(serviceName string) bool {
+	cleaned := strings.TrimPrefix(serviceName, "svc:")
+	return c.protectedServices[cleaned]
+}
+
 // buildDestination constructs the destination URL for a service
 func buildDestination(svc *apptypes.ContainerService) string {
 	// Use the service protocol directly in the destination URL

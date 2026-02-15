@@ -19,11 +19,12 @@ import (
 
 // Client handles Tailscale CLI interactions and API calls
 type Client struct {
-	socketPath     string
-	tailnet        string
-	baseURL        string
-	httpClient     *http.Client
-	apiSyncEnabled bool
+	socketPath        string
+	tailnet           string
+	baseURL           string
+	httpClient        *http.Client
+	apiSyncEnabled    bool
+	protectedServices map[string]bool
 }
 
 // ClientConfig holds configuration for creating a Tailscale client
@@ -33,15 +34,29 @@ type ClientConfig struct {
 	APIKey            string
 	OAuthClientID     string
 	OAuthClientSecret string
+	ProtectedServices []string
 }
 
 // NewClient creates a new Tailscale client
 // Prefers OAuth credentials over API key if both are provided
 func NewClient(cfg ClientConfig) *Client {
+	protected := make(map[string]bool, len(cfg.ProtectedServices))
+	for _, name := range cfg.ProtectedServices {
+		protected[strings.TrimPrefix(name, "svc:")] = true
+	}
+	if len(protected) > 0 {
+		names := make([]string, 0, len(protected))
+		for name := range protected {
+			names = append(names, name)
+		}
+		log.Info().Strs("protected_services", names).Msg("Protected services configured (will not be removed)")
+	}
+
 	client := &Client{
-		socketPath: cfg.SocketPath,
-		tailnet:    cfg.Tailnet,
-		baseURL:    "https://api.tailscale.com",
+		socketPath:        cfg.SocketPath,
+		tailnet:           cfg.Tailnet,
+		baseURL:           "https://api.tailscale.com",
+		protectedServices: protected,
 	}
 
 	// Prefer OAuth over API key
@@ -182,6 +197,12 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	// Find services to remove (in current but not in desired)
 	for key, current := range currentServices {
 		if _, exists := desiredMap[key]; !exists {
+			if c.isProtectedService(current.ServiceName) {
+				log.Info().
+					Str("service", current.ServiceName).
+					Msg("Skipping removal of protected service")
+				continue
+			}
 			toRemove[key] = current
 		}
 	}
@@ -513,6 +534,13 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 	failCount := 0
 
 	for _, svc := range currentServices {
+		if c.isProtectedService(svc.ServiceName) {
+			log.Info().
+				Str("service", svc.ServiceName).
+				Msg("Skipping cleanup of protected service")
+			continue
+		}
+
 		log.Info().
 			Str("service", svc.ServiceName).
 			Str("port", svc.Port).
