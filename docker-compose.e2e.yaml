@@ -4,7 +4,7 @@ services:
   # ============================================================================
 
   tailscale:
-    image: tailscale/tailscale:v1.93.0
+    image: tailscale/tailscale:v1.93
     container_name: e2e-tailscale
     hostname: e2e-docktail
     environment:
