@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -14,7 +13,7 @@ import (
 
 // GetCurrentServices retrieves the current Tailscale service status using CLI
 func (c *Client) GetCurrentServices(ctx context.Context) (map[string]ServiceEndpoint, error) {
-	cmd := exec.CommandContext(ctx, "tailscale", "serve", "status", "--json")
+	cmd := c.tailscaleCmd(ctx, "serve", "status", "--json")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		stderr := string(output)
@@ -129,7 +128,7 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 	portArg := fmt.Sprintf("%s=%s", protocolFlag, svc.Port)
 	serviceArg := fmt.Sprintf("--service=%s", serviceName)
 
-	cmd := exec.CommandContext(ctx, "tailscale", "serve", serviceArg, portArg, destination)
+	cmd := c.tailscaleCmd(ctx, "serve", serviceArg, portArg, destination)
 
 	log.Debug().
 		Str("command", cmd.String()).
@@ -161,7 +160,7 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 				Str("service", serviceName).
 				Msg("Retrying add after clearing conflicting config")
 
-			retryCmd := exec.CommandContext(ctx, "tailscale", "serve", serviceArg, portArg, destination)
+			retryCmd := c.tailscaleCmd(ctx, "serve", serviceArg, portArg, destination)
 			retryOutput, retryErr := retryCmd.CombinedOutput()
 			if retryErr != nil {
 				return fmt.Errorf("failed to add service after clearing: %w\nOutput: %s", retryErr, string(retryOutput))
@@ -205,7 +204,7 @@ func (c *Client) clearServiceOnly(ctx context.Context, serviceName string) error
 		Str("service", serviceName).
 		Msg("Clearing service configuration (no drain - service will be reconfigured)")
 
-	cmd := exec.CommandContext(ctx, "tailscale", "serve", "clear", serviceName)
+	cmd := c.tailscaleCmd(ctx, "serve", "clear", serviceName)
 
 	log.Debug().
 		Str("command", cmd.String()).
@@ -252,7 +251,7 @@ func (c *Client) removeService(ctx context.Context, serviceName string) error {
 
 	// Step 1: Drain the service to gracefully close existing connections
 	// This is important for security - prevents stale services from staying accessible
-	drainCmd := exec.CommandContext(ctx, "tailscale", "serve", "drain", serviceName)
+	drainCmd := c.tailscaleCmd(ctx, "serve", "drain", serviceName)
 
 	log.Debug().
 		Str("command", drainCmd.String()).
@@ -281,7 +280,7 @@ func (c *Client) removeService(ctx context.Context, serviceName string) error {
 	}
 
 	// Step 2: Clear the service configuration
-	clearCmd := exec.CommandContext(ctx, "tailscale", "serve", "clear", serviceName)
+	clearCmd := c.tailscaleCmd(ctx, "serve", "clear", serviceName)
 
 	log.Debug().
 		Str("command", clearCmd.String()).
@@ -311,7 +310,7 @@ func (c *Client) removeService(ctx context.Context, serviceName string) error {
 // DrainService gracefully drains a service
 func (c *Client) DrainService(ctx context.Context, serviceName string) error {
 	fullName := fmt.Sprintf("svc:%s", serviceName)
-	cmd := exec.CommandContext(ctx, "tailscale", "serve", "drain", fullName)
+	cmd := c.tailscaleCmd(ctx, "serve", "drain", fullName)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("failed to drain service %s: %w\nOutput: %s", fullName, err, string(output))
 	}

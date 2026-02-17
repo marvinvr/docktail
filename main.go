@@ -76,6 +76,9 @@ func main() {
 		OAuthClientSecret: tailscaleOAuthClientSecret,
 	})
 
+	// Detect CLI/daemon version mismatch (common with host-mode Tailscale)
+	tailscaleClient.DetectVersionMismatch(context.Background())
+
 	log.Info().Msg("Tailscale client initialized")
 
 	// Create reconciler

@@ -1,13 +1,61 @@
 package tailscale
 
 import (
+	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
 	"strings"
 
 	"github.com/rs/zerolog/log"
 
 	apptypes "github.com/marvinvr/docktail/types"
 )
+
+// tailscaleCmd creates an exec.Cmd for the tailscale CLI with the correct
+// environment. When a version mismatch between the bundled CLI and the host's
+// tailscaled has been detected, it sets TS_DEBUG_FAKE_IPC_VERSION so the CLI
+// doesn't reject the connection.
+func (c *Client) tailscaleCmd(ctx context.Context, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "tailscale", args...)
+	if c.serverVersion != "" {
+		cmd.Env = append(os.Environ(), "TS_DEBUG_FAKE_IPC_VERSION="+c.serverVersion)
+	}
+	return cmd
+}
+
+// versionMismatchRe matches the tailscale CLI warning about version mismatch
+// and captures the server version string.
+var versionMismatchRe = regexp.MustCompile(`tailscaled server version "([^"]+)"`)
+
+// DetectVersionMismatch runs `tailscale version` and checks if the bundled CLI
+// version differs from the tailscaled server version (common in "Tailscale on
+// Host" setups where the socket is mounted from the host). If a mismatch is
+// found, the server version is stored so that subsequent CLI calls use
+// TS_DEBUG_FAKE_IPC_VERSION to bypass the check.
+func (c *Client) DetectVersionMismatch(ctx context.Context) {
+	cmd := exec.CommandContext(ctx, "tailscale", "version")
+	output, _ := cmd.CombinedOutput()
+	outStr := string(output)
+
+	if !strings.Contains(outStr, "!= tailscaled server version") {
+		return
+	}
+
+	matches := versionMismatchRe.FindStringSubmatch(outStr)
+	if len(matches) < 2 {
+		log.Warn().
+			Str("output", outStr).
+			Msg("Detected tailscale version mismatch but could not parse server version")
+		return
+	}
+
+	c.serverVersion = matches[1]
+	log.Info().
+		Str("server_version", c.serverVersion).
+		Msg("Tailscale CLI/daemon version mismatch detected; will use TS_DEBUG_FAKE_IPC_VERSION for CLI calls")
+}
 
 // stripWarnings removes warning messages from Tailscale CLI output
 // Warnings appear before the JSON and need to be stripped for parsing

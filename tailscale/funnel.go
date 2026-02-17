@@ -30,7 +30,7 @@ type FunnelHandler struct {
 // getCurrentFunnels retrieves the current funnel status
 // Returns a map where the value is the port (e.g., "443") for cleanup
 func (c *Client) getCurrentFunnels(ctx context.Context) (map[string]string, error) {
-	cmd := exec.CommandContext(ctx, "tailscale", "funnel", "status", "--json")
+	cmd := c.tailscaleCmd(ctx, "funnel", "status", "--json")
 	output, err := cmd.CombinedOutput()
 
 	// Funnel status command doesn't exist or no funnels configured
@@ -216,19 +216,19 @@ func (c *Client) addFunnel(ctx context.Context, svc *apptypes.ContainerService) 
 	case "https", "http":
 		// HTTPS funnel: tailscale funnel --bg --https=<funnel-port> http://localhost:<host-port>
 		portArg := fmt.Sprintf("--https=%s", svc.FunnelFunnelPort)
-		cmd = exec.CommandContext(ctx, "tailscale", "funnel", "--bg", portArg, funnelDestination)
+		cmd = c.tailscaleCmd(ctx, "funnel", "--bg", portArg, funnelDestination)
 
 	case "tcp":
 		// TCP funnel: tailscale funnel --bg --tcp=<funnel-port> tcp://localhost:<host-port>
 		portArg := fmt.Sprintf("--tcp=%s", svc.FunnelFunnelPort)
 		tcpDest := fmt.Sprintf("tcp://%s:%s", svc.IPAddress, svc.FunnelTargetPort)
-		cmd = exec.CommandContext(ctx, "tailscale", "funnel", "--bg", portArg, tcpDest)
+		cmd = c.tailscaleCmd(ctx, "funnel", "--bg", portArg, tcpDest)
 
 	case "tls-terminated-tcp":
 		// TLS-terminated TCP funnel
 		portArg := fmt.Sprintf("--tls-terminated-tcp=%s", svc.FunnelFunnelPort)
 		tcpDest := fmt.Sprintf("tcp://%s:%s", svc.IPAddress, svc.FunnelTargetPort)
-		cmd = exec.CommandContext(ctx, "tailscale", "funnel", "--bg", portArg, tcpDest)
+		cmd = c.tailscaleCmd(ctx, "funnel", "--bg", portArg, tcpDest)
 
 	default:
 		return fmt.Errorf("unsupported funnel protocol: %s", svc.FunnelProtocol)
@@ -270,7 +270,7 @@ func (c *Client) removeFunnel(ctx context.Context, containerName string, port st
 
 	// Command: tailscale funnel reset
 	// Note: This resets ALL funnel configuration, not just one port
-	cmd := exec.CommandContext(ctx, "tailscale", "funnel", "reset")
+	cmd := c.tailscaleCmd(ctx, "funnel", "reset")
 
 	log.Debug().
 		Str("command", cmd.String()).

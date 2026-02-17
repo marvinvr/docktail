@@ -24,6 +24,7 @@ type Client struct {
 	baseURL        string
 	httpClient     *http.Client
 	apiSyncEnabled bool
+	serverVersion  string // set when CLI/daemon version mismatch detected
 }
 
 // ClientConfig holds configuration for creating a Tailscale client
@@ -119,6 +120,9 @@ type TailscaleHandler struct {
 
 // ReconcileServices compares desired services with current services and makes necessary changes
 func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*apptypes.ContainerService) error {
+	// Re-detect version mismatch each cycle in case tailscaled was updated
+	c.DetectVersionMismatch(ctx)
+
 	log.Info().
 		Int("desired_count", len(desiredServices)).
 		Msg("Starting service reconciliation using CLI commands")
