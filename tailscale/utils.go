@@ -40,11 +40,19 @@ func (c *Client) DetectVersionMismatch(ctx context.Context) {
 	outStr := string(output)
 
 	if !strings.Contains(outStr, "!= tailscaled server version") {
+		// Clear stale override so normal matched-version setups use default behavior.
+		if c.serverVersion != "" {
+			log.Info().
+				Str("previous_server_version", c.serverVersion).
+				Msg("Tailscale CLI/daemon versions now aligned; disabling TS_DEBUG_FAKE_IPC_VERSION override")
+			c.serverVersion = ""
+		}
 		return
 	}
 
 	matches := versionMismatchRe.FindStringSubmatch(outStr)
 	if len(matches) < 2 {
+		c.serverVersion = ""
 		log.Warn().
 			Str("output", outStr).
 			Msg("Detected tailscale version mismatch but could not parse server version")
