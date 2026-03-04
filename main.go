@@ -4,13 +4,14 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
-
-	"strings"
 
 	"github.com/marvinvr/docktail/docker"
 	"github.com/marvinvr/docktail/reconciler"
@@ -122,9 +123,13 @@ func main() {
 func setupLogging() {
 	// Configure zerolog
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
+	out := os.Stdout
+	_, noColor := os.LookupEnv("NO_COLOR") // adheres no-color.org
+	isTTY := term.IsTerminal(int(out.Fd()))
 	log.Logger = log.Output(zerolog.ConsoleWriter{
-		Out:        os.Stdout,
+		Out:        out,
 		TimeFormat: time.RFC3339,
+		NoColor:    noColor || !isTTY || os.Getenv("TERM") == "dumb",
 	})
 
 	// Set log level from environment
