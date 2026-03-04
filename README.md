@@ -61,7 +61,9 @@ OAuth lets DockTail **auto-create services** in your Tailscale Admin Console. No
 **Setup:**
 
 1. Go to [Tailscale Admin Console → Settings → OAuth clients](https://login.tailscale.com/admin/settings/oauth)
-2. Create a new OAuth client with scope `all` and your service tags (e.g., `tag:container`)
+2. Create a new OAuth client with the following permissions, scoped to your server tag:
+   - **General → Services**: Write
+   - **Devices → Core**: Write
 3. Add to your DockTail environment:
 
 ```yaml
