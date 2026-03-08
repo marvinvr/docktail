@@ -181,10 +181,16 @@ After deploying DockTail, you need to configure a few things in the [Tailscale A
 
 ### 1. Configure Access Controls (ACLs)
 
-Services require ACL auto-approvers to allow the host machine to advertise them. Go to [Access Controls](https://login.tailscale.com/admin/acls) and add an `autoApprovers` block:
+Services require two things in your ACL policy: **tag definitions** in `tagOwners` and **auto-approvers** to allow the host machine to advertise them.
+
+Go to [Access Controls](https://login.tailscale.com/admin/acls) and add both blocks:
 
 ```json
 {
+  "tagOwners": {
+    "tag:server": ["autogroup:admin"],
+    "tag:container": ["tag:server"]
+  },
   "autoApprovers": {
     "services": {
       "tag:container": ["tag:server"]
@@ -193,7 +199,14 @@ Services require ACL auto-approvers to allow the host machine to advertise them.
 }
 ```
 
-This allows machines tagged `tag:server` to advertise services tagged `tag:container` (the default DockTail tag). Adjust the tags to match your setup — the right side must match the tag on your host machine (or sidecar auth key), and the left side must match the `docktail.tags` label on your containers (defaults to `tag:container`).
+> **Note:** If you manage your ACLs via GitOps (e.g., [tailscale/gitops-acl-action](https://github.com/marketplace/actions/sync-tailscale-acls)), both tags **must** be defined in `tagOwners` — otherwise the sync will fail because Tailscale rejects references to undefined tags.
+
+**How the tags work:**
+
+- `tag:server` — assigned to the host machine (or sidecar auth key) that runs DockTail. This identifies *who* is allowed to advertise services.
+- `tag:container` — the default tag DockTail assigns to the Tailscale services it creates. This identifies *what* is being advertised.
+
+Adjust the tags to match your setup — the right side of `autoApprovers` must match the tag on your host machine, and the left side must match the `docktail.tags` label on your containers (defaults to `tag:container`).
 
 ### 2. Approve the Service
 
@@ -206,6 +219,8 @@ The first time a new service is advertised, it must be manually approved in the 
 After the initial approval, the service will continue to work automatically on subsequent container restarts. If you are using OAuth or API key mode, service definitions are auto-created, but the first approval may still be required depending on your ACL configuration.
 
 ## Labeling Containers
+
+Your application containers (nginx, postgres, APIs, etc.) live alongside DockTail in the same Docker Compose file (or on the same Docker host). DockTail **does not run your services** — it watches for containers with `docktail.*` labels and automatically advertises them as Tailscale services. Each labeled container becomes its own independent Tailscale service.
 
 ### Direct Container IP Proxying (Default)
 

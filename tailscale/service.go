@@ -180,7 +180,8 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 				"     - Host install: sudo tailscale up --advertise-tags=tag:server --reset\n" +
 				"     - Sidecar container: set TS_EXTRA_ARGS=--advertise-tags=tag:server in your Tailscale container's environment\n" +
 				"     - Or tag it in the Tailscale admin console: https://login.tailscale.com/admin/machines → click your node → Edit ACL tags\n" +
-				"  2. Add an ACL auto-approver at https://login.tailscale.com/admin/acls:\n" +
+				"  2. Define tags and add an ACL auto-approver at https://login.tailscale.com/admin/acls:\n" +
+				"     \"tagOwners\": { \"tag:server\": [\"autogroup:admin\"], \"tag:container\": [\"tag:server\"] }\n" +
 				"     \"autoApprovers\": { \"services\": { \"tag:container\": [\"tag:server\"] } }\n" +
 				"  3. Approve the service at https://login.tailscale.com/admin/services\n" +
 				"Full setup guide: https://github.com/marvinvr/docktail#tailscale-admin-setup")
