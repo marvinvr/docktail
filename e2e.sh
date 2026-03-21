@@ -228,6 +228,26 @@ assert_funnel_active() {
     fi
 }
 
+wait_for_docktail_log() {
+    local pattern="$1"
+    local timeout="${2:-$RECONCILE_WAIT}"
+    local elapsed=0
+    local logs
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 || true)
+        if grep -q -- "$pattern" <<<"$logs"; then
+            pass "docktail log contains '$pattern'"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    fail "docktail log missing '$pattern'"
+    return 1
+}
+
 # ==============================================================================
 # Start the stack
 # ==============================================================================
@@ -406,6 +426,7 @@ refresh_serve_status
 echo "  --- Post-reconcile: manual protected service should still exist ---"
 assert_service_exists       "e2e-manual-protected"
 assert_service_port         "e2e-manual-protected" "$MANUAL_PROTECTED_SERVICE_PORT"
+wait_for_docktail_log "Skipping removal for ignored service"
 
 echo "  --- Cleaning up manual protected service ---"
 clear_manual_protected_service
@@ -495,16 +516,10 @@ assert_service_not_exists   "e2e-manual-protected"  # cleaned up explicitly
 log "12. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
-if echo "$docktail_logs" | grep -qE "FATAL|panic"; then
+if grep -qE "FATAL|panic" <<<"$docktail_logs"; then
     fail "FATAL or panic in logs"
 else
     pass "no FATAL or panic in logs"
-fi
-
-if echo "$docktail_logs" | grep -q "Skipping removal for ignored service"; then
-    pass "ignored service skip logged"
-else
-    fail "ignored service skip was not logged"
 fi
 
 # ==============================================================================
