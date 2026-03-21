@@ -6,6 +6,8 @@ DOCKTAIL_CONTAINER="e2e-docktail"
 MAX_WAIT=120
 RECONCILE_WAIT=10
 SCRIPT_TIMEOUT=600
+MANUAL_PROTECTED_SERVICE_NAME="svc:e2e-manual-protected"
+MANUAL_PROTECTED_SERVICE_PORT="18081"
 
 # Kill the script if it runs longer than SCRIPT_TIMEOUT seconds
 ( sleep "$SCRIPT_TIMEOUT" && echo "ERROR: E2E script timed out after ${SCRIPT_TIMEOUT}s" && kill $$ ) 2>/dev/null &
@@ -204,6 +206,17 @@ get_funnel_status() {
     docker exec "$TS_CONTAINER" tailscale funnel status --json 2>/dev/null || echo "{}"
 }
 
+create_manual_protected_service() {
+    docker exec "$TS_CONTAINER" tailscale serve \
+        --service="$MANUAL_PROTECTED_SERVICE_NAME" \
+        --http="$MANUAL_PROTECTED_SERVICE_PORT" \
+        http://127.0.0.1:19080 >/dev/null 2>&1
+}
+
+clear_manual_protected_service() {
+    docker exec "$TS_CONTAINER" tailscale serve clear "$MANUAL_PROTECTED_SERVICE_NAME" >/dev/null 2>&1 || true
+}
+
 assert_funnel_active() {
     local port="$1"
     local funnel_status
@@ -372,10 +385,38 @@ log "7. Ignored Container"
 assert_service_not_exists   "e2e-ignored"
 
 # ==============================================================================
-# 8. Lifecycle: service removal on container stop
+# 8. Ignore Service Names: keep manual svc:* entries
 # ==============================================================================
 
-log "8. Lifecycle"
+log "8. Ignore Service Names"
+
+echo "  --- Creating manual protected service ---"
+clear_manual_protected_service
+create_manual_protected_service
+refresh_serve_status
+assert_service_exists       "e2e-manual-protected"
+assert_service_port         "e2e-manual-protected" "$MANUAL_PROTECTED_SERVICE_PORT"
+assert_service_protocol     "e2e-manual-protected" "http"
+assert_service_destination_contains "e2e-manual-protected" "127.0.0.1:19080"
+
+echo "  Waiting for reconciliation while protected service exists..."
+sleep "$RECONCILE_WAIT"
+refresh_serve_status
+
+echo "  --- Post-reconcile: manual protected service should still exist ---"
+assert_service_exists       "e2e-manual-protected"
+assert_service_port         "e2e-manual-protected" "$MANUAL_PROTECTED_SERVICE_PORT"
+
+echo "  --- Cleaning up manual protected service ---"
+clear_manual_protected_service
+refresh_serve_status
+assert_service_not_exists   "e2e-manual-protected"
+
+# ==============================================================================
+# 9. Lifecycle: service removal on container stop
+# ==============================================================================
+
+log "9. Lifecycle"
 
 echo "  --- Pre-check: lifecycle service exists ---"
 assert_service_exists       "e2e-lifecycle"
@@ -394,10 +435,10 @@ assert_service_exists       "e2e-proto-http"
 assert_service_exists       "e2e-proto-https"
 
 # ==============================================================================
-# 9. Service Update: change protocol from HTTP to HTTPS
+# 10. Service Update: change protocol from HTTP to HTTPS
 # ==============================================================================
 
-log "9. Service Update"
+log "10. Service Update"
 
 echo "  --- Pre-check: update service is HTTP/80 ---"
 assert_service_exists       "e2e-update"
@@ -427,10 +468,10 @@ assert_service_port         "e2e-update" "443"
 assert_service_protocol     "e2e-update" "https"
 
 # ==============================================================================
-# 10. Idempotency: reconciling again changes nothing
+# 11. Idempotency: reconciling again changes nothing
 # ==============================================================================
 
-log "10. Idempotency"
+log "11. Idempotency"
 echo "  Waiting for another reconciliation cycle..."
 sleep "$RECONCILE_WAIT"
 refresh_serve_status
@@ -445,18 +486,25 @@ assert_service_exists       "e2e-multiport"
 assert_service_exists       "e2e-multiport-three"
 assert_service_not_exists   "e2e-lifecycle"  # still removed
 assert_service_not_exists   "e2e-ignored"    # still ignored
+assert_service_not_exists   "e2e-manual-protected"  # cleaned up explicitly
 
 # ==============================================================================
-# 11. Log Health
+# 12. Log Health
 # ==============================================================================
 
-log "11. DockTail Log Health"
+log "12. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if echo "$docktail_logs" | grep -qE "FATAL|panic"; then
     fail "FATAL or panic in logs"
 else
     pass "no FATAL or panic in logs"
+fi
+
+if echo "$docktail_logs" | grep -q "Skipping removal for ignored service"; then
+    pass "ignored service skip logged"
+else
+    fail "ignored service skip was not logged"
 fi
 
 # ==============================================================================

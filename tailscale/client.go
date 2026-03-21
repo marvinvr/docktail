@@ -19,30 +19,40 @@ import (
 
 // Client handles Tailscale CLI interactions and API calls
 type Client struct {
-	socketPath     string
-	tailnet        string
-	baseURL        string
-	httpClient     *http.Client
-	apiSyncEnabled bool
-	serverVersion  string // set when CLI/daemon version mismatch detected
+	socketPath      string
+	tailnet         string
+	baseURL         string
+	httpClient      *http.Client
+	apiSyncEnabled  bool
+	serverVersion   string // set when CLI/daemon version mismatch detected
+	ignoredServices map[string]struct{}
 }
 
 // ClientConfig holds configuration for creating a Tailscale client
 type ClientConfig struct {
-	SocketPath        string
-	Tailnet           string
-	APIKey            string
-	OAuthClientID     string
-	OAuthClientSecret string
+	SocketPath         string
+	Tailnet            string
+	APIKey             string
+	OAuthClientID      string
+	OAuthClientSecret  string
+	IgnoreServiceNames []string
 }
 
 // NewClient creates a new Tailscale client
 // Prefers OAuth credentials over API key if both are provided
 func NewClient(cfg ClientConfig) *Client {
 	client := &Client{
-		socketPath: cfg.SocketPath,
-		tailnet:    cfg.Tailnet,
-		baseURL:    "https://api.tailscale.com",
+		socketPath:      cfg.SocketPath,
+		tailnet:         cfg.Tailnet,
+		baseURL:         "https://api.tailscale.com",
+		ignoredServices: make(map[string]struct{}),
+	}
+
+	for _, serviceName := range cfg.IgnoreServiceNames {
+		normalized := normalizeServiceName(serviceName)
+		if normalized != "" {
+			client.ignoredServices[normalized] = struct{}{}
+		}
 	}
 
 	// Prefer OAuth over API key
@@ -186,6 +196,13 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	// Find services to remove (in current but not in desired)
 	for key, current := range currentServices {
 		if _, exists := desiredMap[key]; !exists {
+			if c.shouldIgnoreService(current.ServiceName) {
+				log.Info().
+					Str("service", current.ServiceName).
+					Str("port", current.Port).
+					Msg("Skipping removal for ignored service")
+				continue
+			}
 			toRemove[key] = current
 		}
 	}
@@ -517,6 +534,14 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 	failCount := 0
 
 	for _, svc := range currentServices {
+		if c.shouldIgnoreService(svc.ServiceName) {
+			log.Info().
+				Str("service", svc.ServiceName).
+				Str("port", svc.Port).
+				Msg("Skipping cleanup for ignored service")
+			continue
+		}
+
 		log.Info().
 			Str("service", svc.ServiceName).
 			Str("port", svc.Port).

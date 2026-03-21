@@ -45,6 +45,7 @@ services:
     environment:
       - LOG_LEVEL=info
       - RECONCILE_INTERVAL=60s
+      # - IGNORE_SERVICE_NAMES=plug-soudan-pi5,grafana
       # Optional: Control Plane Sync (uncomment to enable)
       # - TAILSCALE_API_KEY=${TAILSCALE_API_KEY}
       # - TAILSCALE_TAILNET=${TAILSCALE_TAILNET:-}

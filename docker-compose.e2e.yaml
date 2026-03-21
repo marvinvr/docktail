@@ -42,6 +42,7 @@ services:
       - LOG_LEVEL=debug
       - RECONCILE_INTERVAL=5s
       - DEFAULT_SERVICE_TAGS=tag:ci-test-container
+      - IGNORE_SERVICE_NAMES=e2e-manual-protected
       - TAILSCALE_OAUTH_CLIENT_ID=${TS_OAUTH_CLIENT_ID:-}
       - TAILSCALE_OAUTH_CLIENT_SECRET=${TS_OAUTH_CLIENT_SECRET:-}
       - TAILSCALE_TAILNET=${TS_TAILNET:-}

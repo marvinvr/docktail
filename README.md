@@ -402,12 +402,15 @@ Access:
 | `TAILSCALE_API_KEY` | - | API Key (optional alternative to OAuth, expires 90 days) |
 | `TAILSCALE_TAILNET` | `-` | Tailnet ID (defaults to key's tailnet) |
 | `DEFAULT_SERVICE_TAGS` | `tag:container` | Default tags for services |
+| `IGNORE_SERVICE_NAMES` | - | Comma-separated service names DockTail must not drain or clear during reconciliation or shutdown cleanup |
 | `LOG_LEVEL` | `info` | Logging level (debug, info, warn, error) |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket |
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Tailscale daemon socket |
 
 If both OAuth and API key are set, OAuth takes precedence.
+
+`IGNORE_SERVICE_NAMES` accepts either bare names like `grafana` or fully qualified names like `svc:grafana`.
 
 ### Supported Protocols
 

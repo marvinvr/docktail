@@ -34,12 +34,21 @@ func main() {
 	tailscaleOAuthClientSecret := getEnv("TAILSCALE_OAUTH_CLIENT_SECRET", "")
 	tailscaleTailnet := getEnv("TAILSCALE_TAILNET", "-")
 	defaultTagsStr := getEnv("DEFAULT_SERVICE_TAGS", "tag:container")
+	ignoreServiceNamesStr := getEnv("IGNORE_SERVICE_NAMES", "")
 
 	// Parse default tags
 	var defaultTags []string
 	for _, tag := range strings.Split(defaultTagsStr, ",") {
 		if trimmed := strings.TrimSpace(tag); trimmed != "" {
 			defaultTags = append(defaultTags, trimmed)
+		}
+	}
+
+	// Parse ignored service names
+	var ignoreServiceNames []string
+	for _, name := range strings.Split(ignoreServiceNamesStr, ",") {
+		if trimmed := strings.TrimSpace(name); trimmed != "" {
+			ignoreServiceNames = append(ignoreServiceNames, trimmed)
 		}
 	}
 
@@ -57,6 +66,7 @@ func main() {
 		Str("api_sync_method", apiSyncMethod).
 		Str("tailnet", tailscaleTailnet).
 		Strs("default_tags", defaultTags).
+		Strs("ignore_service_names", ignoreServiceNames).
 		Msg("Configuration loaded")
 
 	// Create Docker client
@@ -70,11 +80,12 @@ func main() {
 
 	// Create Tailscale client
 	tailscaleClient := tailscale.NewClient(tailscale.ClientConfig{
-		SocketPath:        tailscaleSocket,
-		Tailnet:           tailscaleTailnet,
-		APIKey:            tailscaleAPIKey,
-		OAuthClientID:     tailscaleOAuthClientID,
-		OAuthClientSecret: tailscaleOAuthClientSecret,
+		SocketPath:         tailscaleSocket,
+		Tailnet:            tailscaleTailnet,
+		APIKey:             tailscaleAPIKey,
+		OAuthClientID:      tailscaleOAuthClientID,
+		OAuthClientSecret:  tailscaleOAuthClientSecret,
+		IgnoreServiceNames: ignoreServiceNames,
 	})
 
 	// Detect CLI/daemon version mismatch (common with host-mode Tailscale)

@@ -246,6 +246,13 @@ func (c *Client) removeService(ctx context.Context, serviceName string) error {
 		return fmt.Errorf("refusing to remove service '%s': not managed by DockTail (missing 'svc:' prefix)", serviceName)
 	}
 
+	if c.shouldIgnoreService(serviceName) {
+		log.Info().
+			Str("service", serviceName).
+			Msg("Refusing to remove ignored service")
+		return nil
+	}
+
 	log.Info().
 		Str("service", serviceName).
 		Msg("Gracefully removing service: draining then clearing")

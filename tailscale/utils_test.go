@@ -147,6 +147,56 @@ func TestIsManagedService(t *testing.T) {
 	}
 }
 
+func TestNormalizeServiceName(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"bare name", "manual-service", "manual-service"},
+		{"svc prefix", "svc:manual-service", "manual-service"},
+		{"whitespace trimmed", "  svc:trimmed  ", "trimmed"},
+		{"empty string", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeServiceName(tt.input)
+			if result != tt.expected {
+				t.Errorf("normalizeServiceName(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestShouldIgnoreService(t *testing.T) {
+	client := &Client{
+		ignoredServices: map[string]struct{}{
+			"manual-service": {},
+		},
+	}
+
+	tests := []struct {
+		name        string
+		serviceName string
+		expected    bool
+	}{
+		{"bare name matches", "manual-service", true},
+		{"svc prefix matches", "svc:manual-service", true},
+		{"different service", "svc:other-service", false},
+		{"empty service", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := client.shouldIgnoreService(tt.serviceName)
+			if result != tt.expected {
+				t.Errorf("shouldIgnoreService(%q) = %v, want %v", tt.serviceName, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestBuildDestination(t *testing.T) {
 	tests := []struct {
 		name     string
