@@ -143,6 +143,7 @@ services:
     hostname: docktail-host
     environment:
       - TS_AUTHKEY=${TAILSCALE_AUTH_KEY}
+      - TS_EXTRA_ARGS=--advertise-tags=tag:server
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_SOCKET=/var/run/tailscale/tailscaled.sock
     volumes:
@@ -173,7 +174,7 @@ volumes:
   tailscale-socket:
 ```
 
-Set `TAILSCALE_AUTH_KEY` to authenticate the Tailscale container (generate at [Tailscale Admin → Settings → Keys](https://login.tailscale.com/admin/settings/keys)).
+Set `TAILSCALE_AUTH_KEY` to authenticate the Tailscale container (generate at [Tailscale Admin → Settings → Keys](https://login.tailscale.com/admin/settings/keys)). The sidecar must advertise `tag:server` so it can satisfy the ACL auto-approver example shown below.
 
 ## Tailscale Admin Setup
 
