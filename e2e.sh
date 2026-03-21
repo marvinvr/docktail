@@ -7,7 +7,7 @@ MAX_WAIT=120
 RECONCILE_WAIT=10
 SCRIPT_TIMEOUT=600
 MANUAL_PROTECTED_SERVICE_NAME="svc:e2e-manual-protected"
-MANUAL_PROTECTED_SERVICE_PORT="18081"
+MANUAL_PROTECTED_SERVICE_PORT="80"
 
 # Kill the script if it runs longer than SCRIPT_TIMEOUT seconds
 ( sleep "$SCRIPT_TIMEOUT" && echo "ERROR: E2E script timed out after ${SCRIPT_TIMEOUT}s" && kill $$ ) 2>/dev/null &
