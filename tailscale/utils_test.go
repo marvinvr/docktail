@@ -156,6 +156,9 @@ func TestNormalizeServiceName(t *testing.T) {
 		{"bare name", "manual-service", "manual-service"},
 		{"svc prefix", "svc:manual-service", "manual-service"},
 		{"whitespace trimmed", "  svc:trimmed  ", "trimmed"},
+		{"uppercase prefix", "SVC:Manual-Service", "manual-service"},
+		{"mixed case and whitespace", "  SvC:Trimmed  ", "trimmed"},
+		{"uppercase bare name", "MANUAL-SERVICE", "manual-service"},
 		{"empty string", "", ""},
 	}
 
@@ -173,6 +176,7 @@ func TestShouldIgnoreService(t *testing.T) {
 	client := &Client{
 		ignoredServices: map[string]struct{}{
 			"manual-service": {},
+			"trimmed":        {},
 		},
 	}
 
@@ -183,6 +187,9 @@ func TestShouldIgnoreService(t *testing.T) {
 	}{
 		{"bare name matches", "manual-service", true},
 		{"svc prefix matches", "svc:manual-service", true},
+		{"uppercase prefix matches", "SVC:Manual-Service", true},
+		{"mixed case and whitespace matches", "  SvC:Trimmed  ", true},
+		{"uppercase bare name matches", "MANUAL-SERVICE", true},
 		{"different service", "svc:other-service", false},
 		{"empty service", "", false},
 	}
@@ -194,6 +201,32 @@ func TestShouldIgnoreService(t *testing.T) {
 				t.Errorf("shouldIgnoreService(%q) = %v, want %v", tt.serviceName, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestNewClientNormalizesIgnoredServices(t *testing.T) {
+	client := NewClient(ClientConfig{
+		IgnoreServiceNames: []string{
+			"SVC:Manual-Service",
+			"  SvC:Trimmed  ",
+			"MANUAL-SERVICE",
+		},
+	})
+
+	if _, ok := client.ignoredServices["manual-service"]; !ok {
+		t.Fatalf("ignoredServices missing normalized key %q", "manual-service")
+	}
+
+	if _, ok := client.ignoredServices["trimmed"]; !ok {
+		t.Fatalf("ignoredServices missing normalized key %q", "trimmed")
+	}
+
+	if _, ok := client.ignoredServices["SVC:Manual-Service"]; ok {
+		t.Fatalf("ignoredServices should not retain unnormalized key %q", "SVC:Manual-Service")
+	}
+
+	if got, want := len(client.ignoredServices), 2; got != want {
+		t.Fatalf("len(ignoredServices) = %d, want %d", got, want)
 	}
 }
 

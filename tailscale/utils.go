@@ -107,7 +107,8 @@ func isManagedService(serviceName string) bool {
 }
 
 func normalizeServiceName(serviceName string) string {
-	return strings.TrimPrefix(strings.TrimSpace(serviceName), "svc:")
+	normalized := strings.ToLower(strings.TrimSpace(serviceName))
+	return strings.TrimPrefix(normalized, "svc:")
 }
 
 func (c *Client) shouldIgnoreService(serviceName string) bool {
