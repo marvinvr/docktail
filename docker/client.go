@@ -357,9 +357,9 @@ func (c *Client) parseFunnelConfig(cctx *containerCtx, labels map[string]string)
 		}
 	}
 
-	validFunnelProtocols := map[string]bool{"https": true, "tcp": true, "tls-terminated-tcp": true}
+	validFunnelProtocols := map[string]bool{"http": true, "https": true, "tcp": true, "tls-terminated-tcp": true}
 	if !validFunnelProtocols[funnelProtocol] {
-		return nil, fmt.Errorf("invalid funnel protocol: %s (must be https, tcp, or tls-terminated-tcp)", funnelProtocol)
+		return nil, fmt.Errorf("invalid funnel protocol: %s (must be http, https, tcp, or tls-terminated-tcp)", funnelProtocol)
 	}
 
 	funnelDestIP, funnelTargetPort, err := c.resolveDestPort(cctx, funnelPort)

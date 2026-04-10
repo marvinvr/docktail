@@ -25,6 +25,7 @@ type Client struct {
 	httpClient      *http.Client
 	apiSyncEnabled  bool
 	serverVersion   string // set when CLI/daemon version mismatch detected
+	managedFunnels  map[string]struct{}
 	ignoredServices map[string]struct{}
 }
 
@@ -45,6 +46,7 @@ func NewClient(cfg ClientConfig) *Client {
 		socketPath:      cfg.SocketPath,
 		tailnet:         cfg.Tailnet,
 		baseURL:         "https://api.tailscale.com",
+		managedFunnels:  make(map[string]struct{}),
 		ignoredServices: make(map[string]struct{}),
 	}
 
@@ -509,11 +511,31 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 			Int("funnel_count", len(currentFunnels)).
 			Msg("Found funnels to clean up")
 
-		if err := c.resetFunnels(ctx, "cleanup"); err != nil {
-			log.Error().Err(err).Msg("Failed to clean up funnels")
-			totalErrors = append(totalErrors, err)
+		ownedFunnels := make([]string, 0, len(currentFunnels))
+		unmanagedFunnels := make([]string, 0)
+		for publicPort := range currentFunnels {
+			if _, managed := c.managedFunnels[publicPort]; managed {
+				ownedFunnels = append(ownedFunnels, publicPort)
+			} else {
+				unmanagedFunnels = append(unmanagedFunnels, publicPort)
+			}
+		}
+
+		if len(ownedFunnels) == 0 {
+			log.Info().Msg("Skipping funnel cleanup: no current funnels are known to be managed by this DockTail process")
+		} else if len(unmanagedFunnels) > 0 {
+			log.Warn().
+				Strs("managed_public_ports", ownedFunnels).
+				Strs("unmanaged_public_ports", unmanagedFunnels).
+				Msg("Skipping funnel cleanup because unmanaged funnels exist on this node")
 		} else {
-			funnelsCleaned = len(currentFunnels)
+			if err := c.resetFunnels(ctx, "cleanup"); err != nil {
+				log.Error().Err(err).Msg("Failed to clean up funnels")
+				totalErrors = append(totalErrors, err)
+			} else {
+				funnelsCleaned = len(currentFunnels)
+				c.managedFunnels = make(map[string]struct{})
+			}
 		}
 	}
 

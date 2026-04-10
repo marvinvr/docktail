@@ -3,6 +3,7 @@ package tailscale
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -109,6 +110,14 @@ func currentFunnelMatchesDesired(current CurrentFunnel, svc *apptypes.ContainerS
 func isFunnelACLError(output string) bool {
 	return strings.Contains(output, "list of allowed nodes in the tailnet policy file does not include") ||
 		strings.Contains(output, "Funnel is enabled, but the list of allowed nodes")
+}
+
+func managedFunnelPortSet(ports map[string]struct{}) map[string]struct{} {
+	cloned := make(map[string]struct{}, len(ports))
+	for port := range ports {
+		cloned[port] = struct{}{}
+	}
+	return cloned
 }
 
 // getCurrentFunnels retrieves the current funnel status
@@ -247,25 +256,43 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 		return fmt.Errorf("funnel configuration error: %d containers have conflicting funnel-ports (only ONE funnel allowed per port)", len(duplicatePortErrors))
 	}
 
-	staleFunnels := make([]string, 0)
+	previouslyManaged := managedFunnelPortSet(c.managedFunnels)
+	staleManagedFunnels := make([]string, 0)
+	unmanagedCurrentFunnels := make([]string, 0)
+
 	for publicPort := range currentFunnels {
-		if _, exists := desiredFunnels[publicPort]; !exists {
-			staleFunnels = append(staleFunnels, publicPort)
+		if _, managed := previouslyManaged[publicPort]; managed {
+			if _, desired := desiredFunnels[publicPort]; !desired {
+				staleManagedFunnels = append(staleManagedFunnels, publicPort)
+			}
+			continue
 		}
+		unmanagedCurrentFunnels = append(unmanagedCurrentFunnels, publicPort)
 	}
 
-	if len(staleFunnels) > 0 {
-		log.Info().
-			Strs("public_ports", staleFunnels).
-			Msg("Resetting existing funnel configuration before applying desired state")
+	if len(staleManagedFunnels) > 0 {
+		if len(unmanagedCurrentFunnels) > 0 {
+			log.Warn().
+				Strs("stale_public_ports", staleManagedFunnels).
+				Strs("unmanaged_public_ports", unmanagedCurrentFunnels).
+				Msg("Skipping stale funnel cleanup because unmanaged funnels exist on this node")
+		} else {
+			log.Info().
+				Strs("public_ports", staleManagedFunnels).
+				Msg("Resetting DockTail-managed funnel configuration before applying desired state")
 
-		if err := c.resetFunnels(ctx, "reconcile"); err != nil {
-			return err
+			if err := c.resetFunnels(ctx, "reconcile"); err != nil {
+				return err
+			}
+			currentFunnels = make(map[string]CurrentFunnel)
+			previouslyManaged = make(map[string]struct{})
+			staleManagedFunnels = nil
 		}
-		currentFunnels = make(map[string]CurrentFunnel)
 	}
 
 	// Find funnels to add or update.
+	var applyErrors []error
+	successfulFunnels := make(map[string]struct{}, len(desiredFunnels)+len(staleManagedFunnels))
 	for publicPort, svc := range desiredFunnels {
 		current, exists := currentFunnels[publicPort]
 
@@ -274,6 +301,7 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 				Str("container", svc.ContainerName).
 				Str("public_port", svc.FunnelFunnelPort).
 				Msg("Funnel already configured correctly")
+			successfulFunnels[publicPort] = struct{}{}
 			continue
 		}
 
@@ -287,8 +315,20 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 				Err(err).
 				Str("container", svc.ContainerName).
 				Msg("Failed to enable funnel")
-			// Continue with other services
+			applyErrors = append(applyErrors, fmt.Errorf("%s:%s: %w", svc.ContainerName, publicPort, err))
+			continue
 		}
+
+		successfulFunnels[publicPort] = struct{}{}
+	}
+
+	for _, publicPort := range staleManagedFunnels {
+		successfulFunnels[publicPort] = struct{}{}
+	}
+	c.managedFunnels = successfulFunnels
+
+	if len(applyErrors) > 0 {
+		return fmt.Errorf("failed to enable %d funnel(s): %w", len(applyErrors), errors.Join(applyErrors...))
 	}
 
 	return nil
