@@ -205,6 +205,16 @@ services:
       - "docktail.funnel.enable=true"
       - "docktail.funnel.port=80"
 
+  # Funnel-only container on port 8443
+  test-funnel-only:
+    image: nginx:alpine
+    container_name: e2e-funnel-only
+    restart: "no"
+    labels:
+      - "docktail.funnel.enable=true"
+      - "docktail.funnel.port=80"
+      - "docktail.funnel.funnel-port=8443"
+
   # ============================================================================
   # 5. Custom Tags
   # ============================================================================

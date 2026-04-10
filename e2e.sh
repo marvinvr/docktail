@@ -365,8 +365,13 @@ assert_service_protocol     "e2e-default-target443" "http"
 # ==============================================================================
 
 log "4. Funnel"
+echo "  --- service + funnel ---"
 assert_service_exists       "e2e-funnel"
 assert_funnel_active        "443"
+
+echo "  --- funnel only ---"
+assert_service_not_exists   "e2e-funnel-only"
+assert_funnel_active        "8443"
 
 # ==============================================================================
 # 5. Custom Tags
