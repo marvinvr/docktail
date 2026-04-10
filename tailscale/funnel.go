@@ -285,7 +285,6 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 				return err
 			}
 			currentFunnels = make(map[string]CurrentFunnel)
-			previouslyManaged = make(map[string]struct{})
 			staleManagedFunnels = nil
 		}
 	}
