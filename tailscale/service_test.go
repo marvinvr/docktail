@@ -3,6 +3,8 @@ package tailscale
 import (
 	"encoding/json"
 	"testing"
+
+	apptypes "github.com/marvinvr/docktail/types"
 )
 
 func TestTailscaleStatusParsing(t *testing.T) {
@@ -235,6 +237,109 @@ func TestFunnelStatusParsing(t *testing.T) {
 			}
 			if tt.checkFunc != nil {
 				tt.checkFunc(t, status)
+			}
+		})
+	}
+}
+
+func TestCurrentFunnelMatchesDesired(t *testing.T) {
+	desired := &apptypes.ContainerService{
+		IPAddress:        "172.22.0.13",
+		FunnelTargetPort: "3000",
+		FunnelFunnelPort: "8443",
+		FunnelProtocol:   "https",
+	}
+
+	tests := []struct {
+		name    string
+		current CurrentFunnel
+		want    bool
+	}{
+		{
+			name: "matching https funnel",
+			current: CurrentFunnel{
+				PublicPort:  "8443",
+				Protocol:    "https",
+				Destination: "http://172.22.0.13:3000",
+			},
+			want: true,
+		},
+		{
+			name: "mismatched destination",
+			current: CurrentFunnel{
+				PublicPort:  "8443",
+				Protocol:    "https",
+				Destination: "http://172.22.0.13:8080",
+			},
+			want: false,
+		},
+		{
+			name: "mismatched protocol",
+			current: CurrentFunnel{
+				PublicPort:  "8443",
+				Protocol:    "tcp",
+				Destination: "tcp://172.22.0.13:3000",
+			},
+			want: false,
+		},
+		{
+			name: "unknown destination but matching protocol",
+			current: CurrentFunnel{
+				PublicPort: "8443",
+				Protocol:   "https",
+			},
+			want: true,
+		},
+		{
+			name: "missing state details forces reapply",
+			current: CurrentFunnel{
+				PublicPort: "8443",
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := currentFunnelMatchesDesired(tt.current, desired); got != tt.want {
+				t.Errorf("currentFunnelMatchesDesired() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDetectFunnelProtocol(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  map[string]bool
+		expect string
+	}{
+		{
+			name:   "https config",
+			input:  map[string]bool{"HTTPS": true},
+			expect: "https",
+		},
+		{
+			name:   "tcp config",
+			input:  map[string]bool{"TCP": true},
+			expect: "tcp",
+		},
+		{
+			name:   "tls terminated tcp config",
+			input:  map[string]bool{"TLS_TERMINATED_TCP": true},
+			expect: "tls-terminated-tcp",
+		},
+		{
+			name:   "empty config",
+			input:  map[string]bool{},
+			expect: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := detectFunnelProtocol(tt.input); got != tt.expect {
+				t.Errorf("detectFunnelProtocol() = %q, want %q", got, tt.expect)
 			}
 		})
 	}

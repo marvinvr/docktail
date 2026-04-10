@@ -73,19 +73,32 @@ func (c *Client) WatchEvents(ctx context.Context) (<-chan events.Message, <-chan
 	return eventsChan, errChan
 }
 
-// GetEnabledContainers returns all running containers with docktail.service.enable=true
+func isServiceEnabled(labels map[string]string) bool {
+	return labels[apptypes.LabelEnable] == "true"
+}
+
+func isFunnelEnabled(labels map[string]string) bool {
+	return labels[apptypes.LabelFunnelEnable] == "true"
+}
+
+func isManagedContainer(labels map[string]string) bool {
+	return isServiceEnabled(labels) || isFunnelEnabled(labels)
+}
+
+// GetEnabledContainers returns all running containers managed by DockTail.
+// A container can be managed by a Tailscale service, a funnel, or both.
 func (c *Client) GetEnabledContainers(ctx context.Context) ([]*apptypes.ContainerService, error) {
-	containers, err := c.cli.ContainerList(ctx, container.ListOptions{
-		Filters: filters.NewArgs(
-			filters.Arg("label", apptypes.LabelEnable+"=true"),
-		),
-	})
+	containers, err := c.cli.ContainerList(ctx, container.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 
 	var services []*apptypes.ContainerService
 	for _, cont := range containers {
+		if !isManagedContainer(cont.Labels) {
+			continue
+		}
+
 		parsed, err := c.parseContainer(ctx, cont.ID, cont.Labels)
 		if err != nil {
 			log.Warn().
@@ -303,34 +316,81 @@ func (c *Client) resolveDestPort(cctx *containerCtx, targetPort string) (string,
 	return "localhost", hostPort, nil
 }
 
-// parseContainer extracts service configuration from container labels.
-// Returns one ContainerService for the primary port plus one for each indexed port.
-func (c *Client) parseContainer(ctx context.Context, containerID string, labels map[string]string) ([]*apptypes.ContainerService, error) {
-	// Check if docktail is enabled
-	if labels[apptypes.LabelEnable] != "true" {
+type funnelConfig struct {
+	IPAddress  string
+	Port       string
+	TargetPort string
+	PublicPort string
+	Protocol   string
+}
+
+func (c *Client) parseFunnelConfig(cctx *containerCtx, labels map[string]string) (*funnelConfig, error) {
+	if !isFunnelEnabled(labels) {
 		return nil, nil
 	}
 
-	// Validate required labels
-	serviceName := labels[apptypes.LabelService]
-	if serviceName == "" {
-		return nil, fmt.Errorf("missing required label: %s", apptypes.LabelService)
+	funnelPort := labels[apptypes.LabelFunnelPort]
+	if funnelPort == "" {
+		return nil, fmt.Errorf("funnel enabled but missing required label: %s (container port)", apptypes.LabelFunnelPort)
 	}
 
-	targetPort := labels[apptypes.LabelTarget]
-	if targetPort == "" {
-		return nil, fmt.Errorf("missing required label: %s", apptypes.LabelTarget)
+	funnelProtocol := labels[apptypes.LabelFunnelProtocol]
+	if funnelProtocol == "" {
+		funnelProtocol = "https"
+		log.Debug().
+			Str("container", cctx.containerID[:12]).
+			Msg("Funnel protocol not specified, defaulting to HTTPS")
 	}
 
-	// Resolve protocols for the primary port
-	protocol, port, serviceProtocol, err := resolveProtocols(
-		containerID, targetPort,
-		labels[apptypes.LabelPort],
-		labels[apptypes.LabelServiceProtocol],
-		labels[apptypes.LabelTargetProtocol],
-	)
+	funnelFunnelPort := labels[apptypes.LabelFunnelFunnelPort]
+	if funnelFunnelPort == "" {
+		funnelFunnelPort = "443"
+		log.Debug().
+			Str("container", cctx.containerID[:12]).
+			Msg("Funnel public port not specified, defaulting to 443")
+	}
+
+	if funnelProtocol == "https" || funnelProtocol == "http" {
+		validFunnelPorts := map[string]bool{"443": true, "8443": true, "10000": true}
+		if !validFunnelPorts[funnelFunnelPort] {
+			return nil, fmt.Errorf("invalid funnel-port: %s for HTTPS/HTTP (must be 443, 8443, or 10000)", funnelFunnelPort)
+		}
+	}
+
+	validFunnelProtocols := map[string]bool{"https": true, "tcp": true, "tls-terminated-tcp": true}
+	if !validFunnelProtocols[funnelProtocol] {
+		return nil, fmt.Errorf("invalid funnel protocol: %s (must be https, tcp, or tls-terminated-tcp)", funnelProtocol)
+	}
+
+	funnelDestIP, funnelTargetPort, err := c.resolveDestPort(cctx, funnelPort)
 	if err != nil {
 		return nil, err
+	}
+
+	log.Info().
+		Str("container", cctx.containerName).
+		Str("funnel_container_port", funnelPort).
+		Str("funnel_host_port", funnelTargetPort).
+		Str("funnel_public_port", funnelFunnelPort).
+		Str("funnel_protocol", funnelProtocol).
+		Msg("Funnel enabled for public internet access")
+
+	return &funnelConfig{
+		IPAddress:  funnelDestIP,
+		Port:       funnelPort,
+		TargetPort: funnelTargetPort,
+		PublicPort: funnelFunnelPort,
+		Protocol:   funnelProtocol,
+	}, nil
+}
+
+// parseContainer extracts service configuration from container labels.
+// Returns one ContainerService for the primary port plus one for each indexed port.
+func (c *Client) parseContainer(ctx context.Context, containerID string, labels map[string]string) ([]*apptypes.ContainerService, error) {
+	serviceEnabled := isServiceEnabled(labels)
+	funnelEnabled := isFunnelEnabled(labels)
+	if !serviceEnabled && !funnelEnabled {
+		return nil, nil
 	}
 
 	// Get container details for port bindings
@@ -349,12 +409,6 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		isHostNetwork:    inspect.HostConfig != nil && string(inspect.HostConfig.NetworkMode) == "host",
 		isNoNetwork:      inspect.HostConfig != nil && string(inspect.HostConfig.NetworkMode) == "none",
 		isDirectMode:     labels[apptypes.LabelDirect] != "false",
-	}
-
-	// Resolve destination for primary port
-	destIP, destPort, err := c.resolveDestPort(cctx, targetPort)
-	if err != nil {
-		return nil, err
 	}
 
 	// Parse tags
@@ -377,103 +431,89 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		copy(tags, c.defaultTags)
 	}
 	cctx.tags = tags
-	cctx.destIP = destIP
 
-	// Parse funnel configuration (COMPLETELY INDEPENDENT of serve)
-	funnelEnabled := labels[apptypes.LabelFunnelEnable] == "true"
-	var funnelPort, funnelTargetPort, funnelFunnelPort, funnelProtocol string
-
-	if funnelEnabled {
-		funnelPort = labels[apptypes.LabelFunnelPort]
-		if funnelPort == "" {
-			return nil, fmt.Errorf("funnel enabled but missing required label: %s (container port)", apptypes.LabelFunnelPort)
+	var result []*apptypes.ContainerService
+	if serviceEnabled {
+		// Validate required labels
+		serviceName := labels[apptypes.LabelService]
+		if serviceName == "" {
+			return nil, fmt.Errorf("missing required label: %s", apptypes.LabelService)
 		}
 
-		funnelProtocol = labels[apptypes.LabelFunnelProtocol]
-		if funnelProtocol == "" {
-			funnelProtocol = "https"
-			log.Debug().
-				Str("container", containerID[:12]).
-				Msg("Funnel protocol not specified, defaulting to HTTPS")
+		targetPort := labels[apptypes.LabelTarget]
+		if targetPort == "" {
+			return nil, fmt.Errorf("missing required label: %s", apptypes.LabelTarget)
 		}
 
-		funnelFunnelPort = labels[apptypes.LabelFunnelFunnelPort]
-		if funnelFunnelPort == "" {
-			funnelFunnelPort = "443"
-			log.Debug().
-				Str("container", containerID[:12]).
-				Msg("Funnel public port not specified, defaulting to 443")
+		// Resolve protocols for the primary port
+		protocol, port, serviceProtocol, err := resolveProtocols(
+			containerID, targetPort,
+			labels[apptypes.LabelPort],
+			labels[apptypes.LabelServiceProtocol],
+			labels[apptypes.LabelTargetProtocol],
+		)
+		if err != nil {
+			return nil, err
 		}
 
-		if funnelProtocol == "https" || funnelProtocol == "http" {
-			validFunnelPorts := map[string]bool{"443": true, "8443": true, "10000": true}
-			if !validFunnelPorts[funnelFunnelPort] {
-				return nil, fmt.Errorf("invalid funnel-port: %s for HTTPS/HTTP (must be 443, 8443, or 10000)", funnelFunnelPort)
-			}
+		// Resolve destination for primary port
+		destIP, destPort, err := c.resolveDestPort(cctx, targetPort)
+		if err != nil {
+			return nil, err
 		}
+		cctx.destIP = destIP
 
-		validFunnelProtocols := map[string]bool{"https": true, "tcp": true, "tls-terminated-tcp": true}
-		if !validFunnelProtocols[funnelProtocol] {
-			return nil, fmt.Errorf("invalid funnel protocol: %s (must be https, tcp, or tls-terminated-tcp)", funnelProtocol)
+		primary := &apptypes.ContainerService{
+			ContainerID:     cctx.containerID[:12],
+			ContainerName:   cctx.containerName,
+			ServiceEnabled:  true,
+			ServiceName:     serviceName,
+			Port:            port,
+			TargetPort:      destPort,
+			ServiceProtocol: serviceProtocol,
+			Protocol:        protocol,
+			Tags:            tags,
+			IPAddress:       destIP,
 		}
+		result = append(result, primary)
 
-		if cctx.isHostNetwork {
-			funnelTargetPort = funnelPort
-		} else if cctx.isDirectMode {
-			funnelTargetPort = funnelPort
-		} else {
-			funnelPortKey := nat.Port(fmt.Sprintf("%s/tcp", funnelPort))
-			if cctx.inspect.HostConfig != nil && cctx.inspect.HostConfig.PortBindings != nil {
-				if bindings, ok := cctx.inspect.HostConfig.PortBindings[funnelPortKey]; ok && len(bindings) > 0 {
-					funnelTargetPort = bindings[0].HostPort
-				}
-			}
-			if funnelTargetPort == "" && cctx.inspect.NetworkSettings != nil && cctx.inspect.NetworkSettings.Ports != nil {
-				if bindings, ok := cctx.inspect.NetworkSettings.Ports[funnelPortKey]; ok && len(bindings) > 0 {
-					funnelTargetPort = bindings[0].HostPort
-				}
-			}
-			if funnelTargetPort == "" {
-				return nil, fmt.Errorf("funnel container port %s is NOT published to host (direct mode disabled). Add it to ports in docker-compose, or remove 'docktail.service.direct=false'", funnelPort)
-			}
+		// Parse indexed services (one container can define multiple separate Tailscale services)
+		indexedServices, err := c.parseIndexedPorts(cctx, labels, serviceName, port)
+		if err != nil {
+			return nil, err
 		}
-
-		log.Info().
-			Str("container", cctx.containerName).
-			Str("funnel_container_port", funnelPort).
-			Str("funnel_host_port", funnelTargetPort).
-			Str("funnel_public_port", funnelFunnelPort).
-			Str("funnel_protocol", funnelProtocol).
-			Msg("Funnel enabled for public internet access")
+		result = append(result, indexedServices...)
 	}
 
-	// Build primary service
-	primary := &apptypes.ContainerService{
-		ContainerID:      cctx.containerID[:12],
-		ContainerName:    cctx.containerName,
-		ServiceName:      serviceName,
-		Port:             port,
-		TargetPort:       destPort,
-		ServiceProtocol:  serviceProtocol,
-		Protocol:         protocol,
-		Tags:             tags,
-		IPAddress:        destIP,
-		FunnelEnabled:    funnelEnabled,
-		FunnelPort:       funnelPort,
-		FunnelTargetPort: funnelTargetPort,
-		FunnelFunnelPort: funnelFunnelPort,
-		FunnelProtocol:   funnelProtocol,
-	}
-
-	// Parse indexed services (one container can define multiple separate Tailscale services)
-	indexedServices, err := c.parseIndexedPorts(cctx, labels, serviceName, port)
+	funnelCfg, err := c.parseFunnelConfig(cctx, labels)
 	if err != nil {
 		return nil, err
 	}
+	if funnelCfg == nil {
+		return result, nil
+	}
 
-	result := make([]*apptypes.ContainerService, 0, 1+len(indexedServices))
-	result = append(result, primary)
-	result = append(result, indexedServices...)
+	if serviceEnabled {
+		result[0].FunnelEnabled = true
+		result[0].FunnelPort = funnelCfg.Port
+		result[0].FunnelTargetPort = funnelCfg.TargetPort
+		result[0].FunnelFunnelPort = funnelCfg.PublicPort
+		result[0].FunnelProtocol = funnelCfg.Protocol
+		return result, nil
+	}
+
+	result = append(result, &apptypes.ContainerService{
+		ContainerID:      cctx.containerID[:12],
+		ContainerName:    cctx.containerName,
+		ServiceEnabled:   false,
+		Tags:             tags,
+		IPAddress:        funnelCfg.IPAddress,
+		FunnelEnabled:    true,
+		FunnelPort:       funnelCfg.Port,
+		FunnelTargetPort: funnelCfg.TargetPort,
+		FunnelFunnelPort: funnelCfg.PublicPort,
+		FunnelProtocol:   funnelCfg.Protocol,
+	})
 
 	return result, nil
 }
@@ -591,6 +631,7 @@ func (c *Client) parseIndexedPorts(
 		svc := &apptypes.ContainerService{
 			ContainerID:     cctx.containerID[:12],
 			ContainerName:   cctx.containerName,
+			ServiceEnabled:  true,
 			ServiceName:     idxServiceName,
 			Port:            servicePort,
 			TargetPort:      idxDestPort,

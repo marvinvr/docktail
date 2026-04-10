@@ -3,6 +3,8 @@ package docker
 import (
 	"strconv"
 	"testing"
+
+	apptypes "github.com/marvinvr/docktail/types"
 )
 
 func TestResolveProtocols(t *testing.T) {
@@ -182,6 +184,55 @@ func TestResolveProtocols(t *testing.T) {
 			}
 			if serviceProtocol != tt.expectedServiceProtocol {
 				t.Errorf("serviceProtocol = %q, want %q", serviceProtocol, tt.expectedServiceProtocol)
+			}
+		})
+	}
+}
+
+func TestManagedContainerDetection(t *testing.T) {
+	tests := []struct {
+		name        string
+		labels      map[string]string
+		wantService bool
+		wantFunnel  bool
+		wantManaged bool
+	}{
+		{
+			name:        "service only container",
+			labels:      map[string]string{apptypes.LabelEnable: "true"},
+			wantService: true,
+			wantManaged: true,
+		},
+		{
+			name:        "funnel only container",
+			labels:      map[string]string{apptypes.LabelFunnelEnable: "true"},
+			wantFunnel:  true,
+			wantManaged: true,
+		},
+		{
+			name:        "service and funnel container",
+			labels:      map[string]string{apptypes.LabelEnable: "true", apptypes.LabelFunnelEnable: "true"},
+			wantService: true,
+			wantFunnel:  true,
+			wantManaged: true,
+		},
+		{
+			name:        "unmanaged container",
+			labels:      map[string]string{},
+			wantManaged: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isServiceEnabled(tt.labels); got != tt.wantService {
+				t.Errorf("isServiceEnabled() = %v, want %v", got, tt.wantService)
+			}
+			if got := isFunnelEnabled(tt.labels); got != tt.wantFunnel {
+				t.Errorf("isFunnelEnabled() = %v, want %v", got, tt.wantFunnel)
+			}
+			if got := isManagedContainer(tt.labels); got != tt.wantManaged {
+				t.Errorf("isManagedContainer() = %v, want %v", got, tt.wantManaged)
 			}
 		})
 	}

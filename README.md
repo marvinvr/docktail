@@ -266,7 +266,7 @@ DockTail automatically detects the container's IP address and configures Tailsca
 
 ### Funnel Labels (Public Internet Access)
 
-Funnel exposes your service to the **public internet**. Independent from service labels.
+Funnel exposes your service to the **public internet**. It can be used together with a DockTail service or on its own for funnel-only containers.
 
 | Label | Required | Default | Description |
 |-------|----------|---------|-------------|
@@ -278,6 +278,8 @@ Funnel exposes your service to the **public internet**. Independent from service
 **Notes:**
 - Only ONE funnel per port (Tailscale limitation)
 - Uses machine hostname, not service name: `https://<machine>.<tailnet>.ts.net`
+- Funnel-only containers can omit `docktail.service.enable` and the other `docktail.service.*` labels entirely
+- `docktail.service.direct` and `docktail.service.network` still control how DockTail reaches the container backend for funnel traffic
 
 ## Examples
 
@@ -396,6 +398,21 @@ services:
 Access:
 - Tailnet: `https://website.your-tailnet.ts.net`
 - Public: `https://your-machine.your-tailnet.ts.net`
+
+### Funnel-Only Public Proxy
+
+```yaml
+services:
+  immich-public-proxy:
+    image: ghcr.io/immich-app/immich-public-proxy:latest
+    labels:
+      - "docktail.funnel.enable=true"
+      - "docktail.funnel.port=3000"
+      - "docktail.funnel.funnel-port=8443"
+```
+
+Access:
+- Public only: `https://your-machine.your-tailnet.ts.net:8443`
 
 ## Reference
 

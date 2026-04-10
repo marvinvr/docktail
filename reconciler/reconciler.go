@@ -89,14 +89,28 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		Msg("Found enabled containers")
 
 	for _, container := range containers {
-		log.Debug().
+		event := log.Debug().
 			Str("container", container.ContainerName).
-			Str("service", container.ServiceName).
-			Str("ip", container.IPAddress).
-			Str("port", container.Port).
-			Str("target", container.TargetPort).
-			Str("protocol", container.Protocol).
-			Msg("Container configuration")
+			Bool("service_enabled", container.ServiceEnabled).
+			Bool("funnel_enabled", container.FunnelEnabled).
+			Str("ip", container.IPAddress)
+
+		if container.ServiceEnabled {
+			event = event.
+				Str("service", container.ServiceName).
+				Str("port", container.Port).
+				Str("target", container.TargetPort).
+				Str("protocol", container.Protocol)
+		}
+
+		if container.FunnelEnabled {
+			event = event.
+				Str("funnel_public_port", container.FunnelFunnelPort).
+				Str("funnel_target_port", container.FunnelTargetPort).
+				Str("funnel_protocol", container.FunnelProtocol)
+		}
+
+		event.Msg("Container configuration")
 	}
 
 	// Reconcile services using CLI commands

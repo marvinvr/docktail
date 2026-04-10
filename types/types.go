@@ -4,6 +4,7 @@ package types
 type ContainerService struct {
 	ContainerID      string
 	ContainerName    string
+	ServiceEnabled   bool
 	ServiceName      string
 	Port             string   // Tailscale service port (e.g., "443")
 	TargetPort       string   // Container/host port to proxy to (e.g., "9080")

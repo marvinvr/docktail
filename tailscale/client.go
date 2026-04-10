@@ -133,13 +133,23 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	// Re-detect version mismatch each cycle in case tailscaled was updated
 	c.DetectVersionMismatch(ctx)
 
+	serviceDesiredCount := 0
+	for _, svc := range desiredServices {
+		if svc.ServiceEnabled {
+			serviceDesiredCount++
+		}
+	}
+
 	log.Info().
-		Int("desired_count", len(desiredServices)).
+		Int("desired_count", serviceDesiredCount).
 		Msg("Starting service reconciliation using CLI commands")
 
 	// Build map of desired services for easy lookup
 	desiredMap := make(map[string]*apptypes.ContainerService)
 	for _, svc := range desiredServices {
+		if !svc.ServiceEnabled {
+			continue
+		}
 		key := fmt.Sprintf("svc:%s:%s", svc.ServiceName, svc.Port)
 		desiredMap[key] = svc
 	}
@@ -305,6 +315,9 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 	uniqueServices := make(map[string]*serviceDef)
 
 	for _, svc := range services {
+		if !svc.ServiceEnabled {
+			continue
+		}
 		def, exists := uniqueServices[svc.ServiceName]
 		if !exists {
 			def = &serviceDef{Tags: svc.Tags}
@@ -485,6 +498,7 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 	log.Info().Msg("Starting cleanup: removing all managed Tailscale services and funnels")
 
 	var totalErrors []error
+	funnelsCleaned := 0
 
 	// Cleanup funnels first (independent of services)
 	currentFunnels, err := c.getCurrentFunnels(ctx)
@@ -495,18 +509,11 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 			Int("funnel_count", len(currentFunnels)).
 			Msg("Found funnels to clean up")
 
-		for _, port := range currentFunnels {
-			log.Info().
-				Str("public_port", port).
-				Msg("Cleaning up funnel")
-
-			if err := c.removeFunnel(ctx, "cleanup", port); err != nil {
-				log.Error().
-					Err(err).
-					Str("public_port", port).
-					Msg("Failed to clean up funnel")
-				totalErrors = append(totalErrors, err)
-			}
+		if err := c.resetFunnels(ctx, "cleanup"); err != nil {
+			log.Error().Err(err).Msg("Failed to clean up funnels")
+			totalErrors = append(totalErrors, err)
+		} else {
+			funnelsCleaned = len(currentFunnels)
 		}
 	}
 
@@ -563,7 +570,7 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 	log.Info().
 		Int("services_cleaned", successCount).
 		Int("services_failed", failCount).
-		Int("funnels_cleaned", len(currentFunnels)-len(totalErrors)).
+		Int("funnels_cleaned", funnelsCleaned).
 		Int("total_errors", len(totalErrors)).
 		Msg("Cleanup completed")
 

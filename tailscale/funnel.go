@@ -27,17 +27,108 @@ type FunnelHandler struct {
 	Proxy string `json:"Proxy"`
 }
 
+type CurrentFunnel struct {
+	PublicPort  string
+	Protocol    string
+	Destination string
+}
+
+func extractPort(value string) string {
+	idx := strings.LastIndex(value, ":")
+	if idx == -1 || idx == len(value)-1 {
+		return ""
+	}
+	return value[idx+1:]
+}
+
+func detectFunnelProtocol(config map[string]bool) string {
+	for key, enabled := range config {
+		if !enabled {
+			continue
+		}
+
+		normalized := strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(key, "_", "-"), " ", "-"))
+		switch {
+		case strings.Contains(normalized, "tls") && strings.Contains(normalized, "tcp"):
+			return "tls-terminated-tcp"
+		case strings.Contains(normalized, "https") || strings.Contains(normalized, "http"):
+			return "https"
+		case strings.Contains(normalized, "tcp"):
+			return "tcp"
+		}
+	}
+
+	return ""
+}
+
+func firstProxy(config FunnelWebConfig) string {
+	for _, handler := range config.Handlers {
+		if handler.Proxy != "" {
+			return handler.Proxy
+		}
+	}
+	return ""
+}
+
+func normalizeDesiredFunnelProtocol(protocol string) string {
+	if protocol == "http" {
+		return "https"
+	}
+	return protocol
+}
+
+func desiredFunnelDestination(svc *apptypes.ContainerService) string {
+	switch svc.FunnelProtocol {
+	case "tcp", "tls-terminated-tcp":
+		return fmt.Sprintf("tcp://%s:%s", svc.IPAddress, svc.FunnelTargetPort)
+	default:
+		return fmt.Sprintf("http://%s:%s", svc.IPAddress, svc.FunnelTargetPort)
+	}
+}
+
+func currentFunnelMatchesDesired(current CurrentFunnel, svc *apptypes.ContainerService) bool {
+	if current.PublicPort == "" {
+		return false
+	}
+
+	if current.Protocol == "" && current.Destination == "" {
+		return false
+	}
+
+	if current.Protocol != "" && current.Protocol != normalizeDesiredFunnelProtocol(svc.FunnelProtocol) {
+		return false
+	}
+
+	if current.Destination != "" && current.Destination != desiredFunnelDestination(svc) {
+		return false
+	}
+
+	return true
+}
+
+func isFunnelACLError(output string) bool {
+	return strings.Contains(output, "list of allowed nodes in the tailnet policy file does not include") ||
+		strings.Contains(output, "Funnel is enabled, but the list of allowed nodes")
+}
+
 // getCurrentFunnels retrieves the current funnel status
-// Returns a map where the value is the port (e.g., "443") for cleanup
-func (c *Client) getCurrentFunnels(ctx context.Context) (map[string]string, error) {
+// Returns a map keyed by public port (for example "443").
+func (c *Client) getCurrentFunnels(ctx context.Context) (map[string]CurrentFunnel, error) {
 	cmd := c.tailscaleCmd(ctx, "funnel", "status", "--json")
 	output, err := cmd.CombinedOutput()
 
-	// Funnel status command doesn't exist or no funnels configured
-	// This is expected when funnel isn't being used
-	if err != nil || len(output) == 0 {
+	if err != nil {
+		outputStr := string(output)
+		if len(outputStr) == 0 || isNotFoundError(outputStr) {
+			log.Debug().Msg("No funnels configured (this is normal if funnel is not in use)")
+			return make(map[string]CurrentFunnel), nil
+		}
+		return nil, fmt.Errorf("failed to get funnel status: %w\nOutput: %s", err, outputStr)
+	}
+
+	if len(output) == 0 {
 		log.Debug().Msg("No funnels configured (this is normal if funnel is not in use)")
-		return make(map[string]string), nil
+		return make(map[string]CurrentFunnel), nil
 	}
 
 	// Strip warnings from output (like we do for serve status)
@@ -46,30 +137,56 @@ func (c *Client) getCurrentFunnels(ctx context.Context) (map[string]string, erro
 	// Check if output indicates no funnels (before trying to parse JSON)
 	if isNotFoundError(outputStr) || len(outputStr) == 0 || outputStr == "\n" {
 		log.Debug().Msg("No existing funnels found")
-		return make(map[string]string), nil
+		return make(map[string]CurrentFunnel), nil
 	}
 
 	// Parse JSON output
 	var status FunnelStatus
 	if err := json.Unmarshal([]byte(outputStr), &status); err != nil {
 		log.Warn().Err(err).Str("output", outputStr).Msg("Failed to parse funnel status JSON, assuming no funnels")
-		return make(map[string]string), nil
+		return make(map[string]CurrentFunnel), nil
 	}
 
-	// Extract ports from AllowFunnel section
-	// Format: "hostname.tailnet.ts.net:443" -> true
-	funnels := make(map[string]string)
+	funnels := make(map[string]CurrentFunnel)
 	for hostPort := range status.AllowFunnel {
-		// Extract port from "hostname.tailnet.ts.net:443"
-		parts := strings.Split(hostPort, ":")
-		if len(parts) == 2 {
-			port := parts[1]
-			funnels[hostPort] = port
-			log.Debug().
-				Str("host_port", hostPort).
-				Str("port", port).
-				Msg("Detected active funnel")
+		port := extractPort(hostPort)
+		if port == "" {
+			continue
 		}
+
+		current := funnels[port]
+		current.PublicPort = port
+		current.Protocol = detectFunnelProtocol(status.TCP[port])
+		funnels[port] = current
+
+		log.Debug().
+			Str("host_port", hostPort).
+			Str("port", port).
+			Msg("Detected active funnel")
+	}
+
+	for port, tcpConfig := range status.TCP {
+		current := funnels[port]
+		current.PublicPort = port
+		if current.Protocol == "" {
+			current.Protocol = detectFunnelProtocol(tcpConfig)
+		}
+		funnels[port] = current
+	}
+
+	for webKey, webConfig := range status.Web {
+		port := extractPort(webKey)
+		if port == "" {
+			continue
+		}
+
+		current := funnels[port]
+		current.PublicPort = port
+		if current.Protocol == "" {
+			current.Protocol = "https"
+		}
+		current.Destination = firstProxy(webConfig)
+		funnels[port] = current
 	}
 
 	log.Debug().
@@ -90,7 +207,7 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 	currentFunnels, err := c.getCurrentFunnels(ctx)
 	if err != nil {
 		log.Warn().Err(err).Msg("Failed to get current funnels, will proceed with desired state")
-		currentFunnels = make(map[string]string) // service:port -> port
+		currentFunnels = make(map[string]CurrentFunnel)
 	}
 
 	// Build map of desired funnels and check for duplicate funnel-ports
@@ -101,7 +218,7 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 
 	for _, svc := range desiredServices {
 		if svc.FunnelEnabled {
-			key := fmt.Sprintf("svc:%s", svc.ServiceName)
+			key := svc.FunnelFunnelPort
 			desiredFunnels[key] = svc
 
 			// Check for duplicate funnel-port usage
@@ -130,67 +247,47 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 		return fmt.Errorf("funnel configuration error: %d containers have conflicting funnel-ports (only ONE funnel allowed per port)", len(duplicatePortErrors))
 	}
 
-	// Find funnels to add
-	for serviceName, svc := range desiredFunnels {
-		currentPort, exists := currentFunnels[serviceName]
+	staleFunnels := make([]string, 0)
+	for publicPort := range currentFunnels {
+		if _, exists := desiredFunnels[publicPort]; !exists {
+			staleFunnels = append(staleFunnels, publicPort)
+		}
+	}
 
-		if !exists || currentPort != svc.FunnelFunnelPort {
-			// Funnel doesn't exist or port changed - add/update it
-			if exists {
-				// Remove old funnel first if port changed
-				log.Info().
-					Str("container", svc.ContainerName).
-					Str("old_public_port", currentPort).
-					Str("new_public_port", svc.FunnelFunnelPort).
-					Msg("Funnel port changed, updating")
-				if err := c.removeFunnel(ctx, svc.ContainerName, currentPort); err != nil {
-					log.Error().Err(err).Str("container", svc.ContainerName).Msg("Failed to remove old funnel")
-				}
-			}
+	if len(staleFunnels) > 0 {
+		log.Info().
+			Strs("public_ports", staleFunnels).
+			Msg("Resetting existing funnel configuration before applying desired state")
 
-			log.Info().
-				Str("container", svc.ContainerName).
-				Str("public_port", svc.FunnelFunnelPort).
-				Msg("Enabling funnel")
+		if err := c.resetFunnels(ctx, "reconcile"); err != nil {
+			return err
+		}
+		currentFunnels = make(map[string]CurrentFunnel)
+	}
 
-			if err := c.addFunnel(ctx, svc); err != nil {
-				log.Error().
-					Err(err).
-					Str("container", svc.ContainerName).
-					Msg("Failed to enable funnel")
-				// Continue with other services
-			}
-		} else {
+	// Find funnels to add or update.
+	for publicPort, svc := range desiredFunnels {
+		current, exists := currentFunnels[publicPort]
+
+		if exists && currentFunnelMatchesDesired(current, svc) {
 			log.Debug().
 				Str("container", svc.ContainerName).
 				Str("public_port", svc.FunnelFunnelPort).
 				Msg("Funnel already configured correctly")
-		}
-	}
-
-	// Find funnels to remove (in current but not in desired)
-	// Note: We track by public port (funnel-port) since funnel doesn't use service names
-	for _, port := range currentFunnels {
-		portInUse := false
-		for _, svc := range desiredFunnels {
-			if svc.FunnelFunnelPort == port {
-				portInUse = true
-				break
-			}
+			continue
 		}
 
-		if !portInUse {
-			log.Info().
-				Str("public_port", port).
-				Msg("Disabling funnel (no longer desired)")
+		log.Info().
+			Str("container", svc.ContainerName).
+			Str("public_port", svc.FunnelFunnelPort).
+			Msg("Enabling funnel")
 
-			if err := c.removeFunnel(ctx, "unknown", port); err != nil {
-				log.Error().
-					Err(err).
-					Str("public_port", port).
-					Msg("Failed to disable funnel")
-				// Continue with other services
-			}
+		if err := c.addFunnel(ctx, svc); err != nil {
+			log.Error().
+				Err(err).
+				Str("container", svc.ContainerName).
+				Msg("Failed to enable funnel")
+			// Continue with other services
 		}
 	}
 
@@ -206,7 +303,7 @@ func (c *Client) addFunnel(ctx context.Context, svc *apptypes.ContainerService) 
 	}
 
 	// Build destination using funnel's own target port
-	funnelDestination := fmt.Sprintf("http://%s:%s", svc.IPAddress, svc.FunnelTargetPort)
+	funnelDestination := desiredFunnelDestination(svc)
 
 	var cmd *exec.Cmd
 
@@ -247,7 +344,37 @@ func (c *Client) addFunnel(ctx context.Context, svc *apptypes.ContainerService) 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		stderr := string(output)
+		if isFunnelACLError(stderr) {
+			return fmt.Errorf(
+				"failed to enable funnel: this node is not allowed by your Tailscale funnel policy.\n"+
+					"Add the node to the allowed funnel nodes in your tailnet policy, then retry.\n"+
+					"Output: %s",
+				stderr,
+			)
+		}
 		return fmt.Errorf("failed to enable funnel: %w\nOutput: %s", err, stderr)
+	}
+
+	currentFunnels, verifyErr := c.getCurrentFunnels(ctx)
+	if verifyErr != nil {
+		return fmt.Errorf("funnel command succeeded but status verification failed: %w", verifyErr)
+	}
+
+	current, exists := currentFunnels[svc.FunnelFunnelPort]
+	if !exists || !currentFunnelMatchesDesired(current, svc) {
+		stderr := string(output)
+		if isFunnelACLError(stderr) {
+			return fmt.Errorf(
+				"tailscale funnel command completed but the funnel was not created because this node is not allowed by your Tailscale funnel policy.\n"+
+					"Add the node to the allowed funnel nodes in your tailnet policy, then retry.\n"+
+					"Output: %s",
+				stderr,
+			)
+		}
+		return fmt.Errorf(
+			"tailscale funnel command completed but the requested public port %s is not active.\nOutput: %s",
+			svc.FunnelFunnelPort, stderr,
+		)
 	}
 
 	log.Info().
@@ -259,23 +386,17 @@ func (c *Client) addFunnel(ctx context.Context, svc *apptypes.ContainerService) 
 	return nil
 }
 
-// removeFunnel disables Tailscale Funnel using reset
-// This removes ALL public internet access (funnel is independent of serve and service names)
-// Note: tailscale funnel reset removes ALL funnel configs, not just a specific port
-func (c *Client) removeFunnel(ctx context.Context, containerName string, port string) error {
+// resetFunnels clears all machine-level funnel configuration.
+func (c *Client) resetFunnels(ctx context.Context, reason string) error {
 	log.Info().
-		Str("container", containerName).
-		Str("port", port).
-		Msg("Disabling funnel - removing public internet access")
+		Str("reason", reason).
+		Msg("Resetting funnel configuration")
 
-	// Command: tailscale funnel reset
-	// Note: This resets ALL funnel configuration, not just one port
 	cmd := c.tailscaleCmd(ctx, "funnel", "reset")
 
 	log.Debug().
 		Str("command", cmd.String()).
-		Str("container", containerName).
-		Str("port", port).
+		Str("reason", reason).
 		Msg("Executing tailscale funnel reset command")
 
 	output, err := cmd.CombinedOutput()
@@ -284,18 +405,16 @@ func (c *Client) removeFunnel(ctx context.Context, containerName string, port st
 		// Ignore errors if funnel doesn't exist
 		if isNotFoundError(stderr) {
 			log.Debug().
-				Str("container", containerName).
-				Str("port", port).
-				Msg("Funnel doesn't exist, nothing to remove")
+				Str("reason", reason).
+				Msg("Funnel doesn't exist, nothing to reset")
 			return nil
 		}
-		return fmt.Errorf("failed to disable funnel: %w\nOutput: %s", err, stderr)
+		return fmt.Errorf("failed to reset funnels: %w\nOutput: %s", err, stderr)
 	}
 
 	log.Info().
-		Str("container", containerName).
-		Str("port", port).
-		Msg("Funnel disabled successfully")
+		Str("reason", reason).
+		Msg("Funnel configuration reset successfully")
 
 	return nil
 }
