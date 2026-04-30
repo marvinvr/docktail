@@ -36,17 +36,17 @@ Access it at `https://api.your-tailnet.ts.net`.
 ```yaml
 services:
   forgejo:
-  image: codeberg.org/forgejo/forgejo:latest
-  labels:
-      - "docktail.service.enable=true"
-      - "docktail.service.name=forgejo"
-      - "docktail.service.port=3000"
-      - "docktail.service.service-port=443"
-      - "docktail.service.1.enable=true"
-      - "docktail.service.1.name=forgejo"
-      - "docktail.service.1.port=2222"
-      - "docktail.service.1.protocol=tcp"
-      - "docktail.service.1.service-port=22"
+    image: codeberg.org/forgejo/forgejo:latest
+    labels:
+        - "docktail.service.enable=true"
+        - "docktail.service.name=forgejo"
+        - "docktail.service.port=3000"
+        - "docktail.service.service-port=443"
+        - "docktail.service.1.enable=true"
+        - "docktail.service.1.name=forgejo"
+        - "docktail.service.1.port=2222"
+        - "docktail.service.1.protocol=tcp"
+        - "docktail.service.1.service-port=22"
 ```
 
 Access 
