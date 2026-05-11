@@ -238,6 +238,59 @@ func TestManagedContainerDetection(t *testing.T) {
 	}
 }
 
+func TestParseFunnelPath(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		want      string
+		wantError bool
+	}{
+		{
+			name:  "empty path defaults to root",
+			input: "",
+			want:  "/",
+		},
+		{
+			name:  "root path",
+			input: "/",
+			want:  "/",
+		},
+		{
+			name:  "nested path",
+			input: "/webhook/github",
+			want:  "/webhook/github",
+		},
+		{
+			name:  "trims whitespace",
+			input: " /foobar ",
+			want:  "/foobar",
+		},
+		{
+			name:      "missing leading slash",
+			input:     "foobar",
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseFunnelPath(tt.input)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("parseFunnelPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIndexedPortRegex(t *testing.T) {
 	tests := []struct {
 		name          string

@@ -242,12 +242,119 @@ func TestFunnelStatusParsing(t *testing.T) {
 	}
 }
 
+func TestParseFunnelStatus(t *testing.T) {
+	status := FunnelStatus{
+		TCP: map[string]map[string]bool{
+			"443":  {"HTTPS": true},
+			"8443": {"HTTPS": true},
+			"10000": {
+				"TCP": true,
+			},
+		},
+		Web: map[string]FunnelWebConfig{
+			"https://myhost.tail1234.ts.net:443": {
+				Handlers: map[string]FunnelHandler{
+					"/":       {Proxy: "http://172.22.0.13:3000"},
+					"/foobar": {Proxy: "http://172.22.0.14:4000"},
+				},
+			},
+			"https://myhost.tail1234.ts.net:8443": {
+				Handlers: map[string]FunnelHandler{
+					"/hooks/github": {Proxy: "http://172.22.0.15:5000"},
+				},
+			},
+		},
+		AllowFunnel: map[string]bool{
+			"myhost.tail1234.ts.net:443":   true,
+			"myhost.tail1234.ts.net:8443":  true,
+			"myhost.tail1234.ts.net:10000": true,
+		},
+	}
+
+	funnels := parseFunnelStatus(status)
+
+	tests := []struct {
+		name        string
+		key         string
+		wantPort    string
+		wantPath    string
+		wantProto   string
+		wantDest    string
+		wantPresent bool
+	}{
+		{
+			name:        "root handler",
+			key:         "443|/",
+			wantPort:    "443",
+			wantPath:    "/",
+			wantProto:   "https",
+			wantDest:    "http://172.22.0.13:3000",
+			wantPresent: true,
+		},
+		{
+			name:        "path handler sharing port",
+			key:         "443|/foobar",
+			wantPort:    "443",
+			wantPath:    "/foobar",
+			wantProto:   "https",
+			wantDest:    "http://172.22.0.14:4000",
+			wantPresent: true,
+		},
+		{
+			name:        "nested path handler",
+			key:         "8443|/hooks/github",
+			wantPort:    "8443",
+			wantPath:    "/hooks/github",
+			wantProto:   "https",
+			wantDest:    "http://172.22.0.15:5000",
+			wantPresent: true,
+		},
+		{
+			name:        "tcp funnel remains keyed by port only",
+			key:         "10000",
+			wantPort:    "10000",
+			wantProto:   "tcp",
+			wantPresent: true,
+		},
+		{
+			name:        "http path is not collapsed to port",
+			key:         "443",
+			wantPresent: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := funnels[tt.key]
+			if ok != tt.wantPresent {
+				t.Fatalf("presence for key %q = %v, want %v", tt.key, ok, tt.wantPresent)
+			}
+			if !tt.wantPresent {
+				return
+			}
+			if got.PublicPort != tt.wantPort {
+				t.Errorf("PublicPort = %q, want %q", got.PublicPort, tt.wantPort)
+			}
+			if got.Path != tt.wantPath {
+				t.Errorf("Path = %q, want %q", got.Path, tt.wantPath)
+			}
+			if got.Protocol != tt.wantProto {
+				t.Errorf("Protocol = %q, want %q", got.Protocol, tt.wantProto)
+			}
+			if got.Destination != tt.wantDest {
+				t.Errorf("Destination = %q, want %q", got.Destination, tt.wantDest)
+			}
+		})
+	}
+}
+
 func TestCurrentFunnelMatchesDesired(t *testing.T) {
 	desired := &apptypes.ContainerService{
 		IPAddress:        "172.22.0.13",
 		FunnelTargetPort: "3000",
 		FunnelFunnelPort: "8443",
 		FunnelProtocol:   "https",
+		FunnelPath:       "/",
 	}
 
 	tests := []struct {
@@ -259,15 +366,27 @@ func TestCurrentFunnelMatchesDesired(t *testing.T) {
 			name: "matching https funnel",
 			current: CurrentFunnel{
 				PublicPort:  "8443",
+				Path:        "/",
 				Protocol:    "https",
 				Destination: "http://172.22.0.13:3000",
 			},
 			want: true,
 		},
 		{
+			name: "mismatched path",
+			current: CurrentFunnel{
+				PublicPort:  "8443",
+				Path:        "/foo",
+				Protocol:    "https",
+				Destination: "http://172.22.0.13:3000",
+			},
+			want: false,
+		},
+		{
 			name: "mismatched destination",
 			current: CurrentFunnel{
 				PublicPort:  "8443",
+				Path:        "/",
 				Protocol:    "https",
 				Destination: "http://172.22.0.13:8080",
 			},

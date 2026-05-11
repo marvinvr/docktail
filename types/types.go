@@ -17,6 +17,7 @@ type ContainerService struct {
 	FunnelTargetPort string // Host port that maps to FunnelPort
 	FunnelFunnelPort string // Public-facing port (443, 8443, or 10000 for HTTPS)
 	FunnelProtocol   string // Funnel protocol (https, tcp, tls-terminated-tcp)
+	FunnelPath       string // HTTP(S) Funnel path (for example "/" or "/webhook")
 }
 
 // TailscaleServiceConfig represents the JSON structure for Tailscale service configuration
@@ -43,6 +44,7 @@ const (
 	LabelFunnelPort       = "docktail.funnel.port"        // Container port (like service.port)
 	LabelFunnelFunnelPort = "docktail.funnel.funnel-port" // Public port (443, 8443, 10000)
 	LabelFunnelProtocol   = "docktail.funnel.protocol"
+	LabelFunnelPath       = "docktail.funnel.path"
 	LabelDirect           = "docktail.service.direct"  // Direct container IP proxying (default: true, set to "false" to use published ports)
 	LabelNetwork          = "docktail.service.network" // Docker network to use for container IP (default: bridge or first available)
 )

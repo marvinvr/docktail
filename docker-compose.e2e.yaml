@@ -206,6 +206,17 @@ services:
       - "docktail.funnel.enable=true"
       - "docktail.funnel.port=80"
 
+  # Second HTTPS funnel sharing port 443 at a different path
+  test-funnel-path:
+    image: nginx:alpine
+    container_name: e2e-funnel-path
+    restart: "no"
+    labels:
+      - "docktail.funnel.enable=true"
+      - "docktail.funnel.port=80"
+      - "docktail.funnel.funnel-port=443"
+      - "docktail.funnel.path=/e2e-path"
+
   # Funnel-only container on port 8443
   test-funnel-only:
     image: nginx:alpine

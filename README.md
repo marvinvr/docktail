@@ -84,6 +84,15 @@ labels:
   - "docktail.funnel.funnel-port=8443"
 ```
 
+Mount an HTTP(S) Funnel at a path:
+
+```yaml
+labels:
+  - "docktail.funnel.enable=true"
+  - "docktail.funnel.port=3000"
+  - "docktail.funnel.path=/webhook"
+```
+
 ## Documentation
 
 - Human docs: https://docktail.org/docs/

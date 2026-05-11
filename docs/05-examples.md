@@ -132,3 +132,18 @@ services:
 ```
 
 Access it publicly at `https://your-machine.your-tailnet.ts.net:8443`.
+
+### Public Funnel Mounted At A Path
+
+```yaml
+services:
+  webhook:
+    image: my-webhook:latest
+    labels:
+      - "docktail.funnel.enable=true"
+      - "docktail.funnel.port=3000"
+      - "docktail.funnel.funnel-port=443"
+      - "docktail.funnel.path=/webhook"
+```
+
+Access it publicly at `https://your-machine.your-tailnet.ts.net/webhook`.

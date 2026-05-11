@@ -322,6 +322,18 @@ type funnelConfig struct {
 	TargetPort string
 	PublicPort string
 	Protocol   string
+	Path       string
+}
+
+func parseFunnelPath(rawPath string) (string, error) {
+	path := strings.TrimSpace(rawPath)
+	if path == "" {
+		return "/", nil
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("invalid funnel path: %s (must start with /)", rawPath)
+	}
+	return path, nil
 }
 
 func (c *Client) parseFunnelConfig(cctx *containerCtx, labels map[string]string) (*funnelConfig, error) {
@@ -362,6 +374,15 @@ func (c *Client) parseFunnelConfig(cctx *containerCtx, labels map[string]string)
 		return nil, fmt.Errorf("invalid funnel protocol: %s (must be http, https, tcp, or tls-terminated-tcp)", funnelProtocol)
 	}
 
+	funnelPathLabel, hasFunnelPath := labels[apptypes.LabelFunnelPath]
+	funnelPath, err := parseFunnelPath(funnelPathLabel)
+	if err != nil {
+		return nil, err
+	}
+	if hasFunnelPath && (funnelProtocol == "tcp" || funnelProtocol == "tls-terminated-tcp") {
+		return nil, fmt.Errorf("%s is only supported for HTTP/HTTPS funnels", apptypes.LabelFunnelPath)
+	}
+
 	funnelDestIP, funnelTargetPort, err := c.resolveDestPort(cctx, funnelPort)
 	if err != nil {
 		return nil, err
@@ -373,6 +394,7 @@ func (c *Client) parseFunnelConfig(cctx *containerCtx, labels map[string]string)
 		Str("funnel_host_port", funnelTargetPort).
 		Str("funnel_public_port", funnelFunnelPort).
 		Str("funnel_protocol", funnelProtocol).
+		Str("funnel_path", funnelPath).
 		Msg("Funnel enabled for public internet access")
 
 	return &funnelConfig{
@@ -381,6 +403,7 @@ func (c *Client) parseFunnelConfig(cctx *containerCtx, labels map[string]string)
 		TargetPort: funnelTargetPort,
 		PublicPort: funnelFunnelPort,
 		Protocol:   funnelProtocol,
+		Path:       funnelPath,
 	}, nil
 }
 
@@ -499,6 +522,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		result[0].FunnelTargetPort = funnelCfg.TargetPort
 		result[0].FunnelFunnelPort = funnelCfg.PublicPort
 		result[0].FunnelProtocol = funnelCfg.Protocol
+		result[0].FunnelPath = funnelCfg.Path
 		return result, nil
 	}
 
@@ -513,6 +537,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		FunnelTargetPort: funnelCfg.TargetPort,
 		FunnelFunnelPort: funnelCfg.PublicPort,
 		FunnelProtocol:   funnelCfg.Protocol,
+		FunnelPath:       funnelCfg.Path,
 	})
 
 	return result, nil

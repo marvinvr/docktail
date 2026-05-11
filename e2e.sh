@@ -237,6 +237,18 @@ assert_funnel_active() {
     fi
 }
 
+assert_funnel_path() {
+    local port="$1"
+    local path="$2"
+    local funnel_status
+    funnel_status=$(get_funnel_status)
+    if echo "$funnel_status" | jq -e --arg port "$port" --arg path "$path" '.Web | to_entries[] | select(.key | endswith(":" + $port)) | .value.Handlers[$path].Proxy? // empty' >/dev/null 2>&1; then
+        pass "funnel path $path active on port $port"
+    else
+        fail "funnel path $path not found on port $port"
+    fi
+}
+
 wait_for_docktail_log() {
     local pattern="$1"
     local timeout="${2:-$RECONCILE_WAIT}"
@@ -377,6 +389,8 @@ log "4. Funnel"
 echo "  --- service + funnel ---"
 assert_service_exists       "e2e-funnel"
 assert_funnel_active        "443"
+assert_funnel_path          "443" "/"
+assert_funnel_path          "443" "/e2e-path"
 
 echo "  --- funnel only ---"
 assert_service_not_exists   "e2e-funnel-only"

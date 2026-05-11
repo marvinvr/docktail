@@ -61,6 +61,8 @@ Funnel `docktail.funnel.protocol` values:
 | `tcp` | TCP Funnel. |
 | `tls-terminated-tcp` | TLS-terminated TCP Funnel. |
 
+`docktail.funnel.path` is supported only with HTTP(S) Funnel protocols. It defaults to `/` and must start with `/`.
+
 ### Cleanup Behavior
 
 DockTail cleans up the services it advertises locally when it shuts down. It does not delete Tailscale service definitions from the Admin Console API when containers stop; this is a conservative deletion strategy to avoid removing definitions unexpectedly.

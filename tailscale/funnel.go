@@ -30,6 +30,7 @@ type FunnelHandler struct {
 
 type CurrentFunnel struct {
 	PublicPort  string
+	Path        string
 	Protocol    string
 	Destination string
 }
@@ -62,20 +63,40 @@ func detectFunnelProtocol(config map[string]bool) string {
 	return ""
 }
 
-func firstProxy(config FunnelWebConfig) string {
-	for _, handler := range config.Handlers {
-		if handler.Proxy != "" {
-			return handler.Proxy
-		}
-	}
-	return ""
-}
-
 func normalizeDesiredFunnelProtocol(protocol string) string {
 	if protocol == "http" {
 		return "https"
 	}
 	return protocol
+}
+
+func normalizeFunnelPath(path string) string {
+	if path == "" {
+		return "/"
+	}
+	return path
+}
+
+func isHTTPFunnelProtocol(protocol string) bool {
+	return normalizeDesiredFunnelProtocol(protocol) == "https"
+}
+
+func funnelKey(publicPort, path, protocol string) string {
+	if isHTTPFunnelProtocol(protocol) {
+		return publicPort + "|" + normalizeFunnelPath(path)
+	}
+	return publicPort
+}
+
+func desiredFunnelKey(svc *apptypes.ContainerService) string {
+	return funnelKey(svc.FunnelFunnelPort, svc.FunnelPath, svc.FunnelProtocol)
+}
+
+func desiredFunnelEndpoint(svc *apptypes.ContainerService) string {
+	if isHTTPFunnelProtocol(svc.FunnelProtocol) {
+		return svc.FunnelFunnelPort + normalizeFunnelPath(svc.FunnelPath)
+	}
+	return svc.FunnelFunnelPort
 }
 
 func desiredFunnelDestination(svc *apptypes.ContainerService) string {
@@ -100,6 +121,10 @@ func currentFunnelMatchesDesired(current CurrentFunnel, svc *apptypes.ContainerS
 		return false
 	}
 
+	if isHTTPFunnelProtocol(svc.FunnelProtocol) && normalizeFunnelPath(current.Path) != normalizeFunnelPath(svc.FunnelPath) {
+		return false
+	}
+
 	if current.Destination != "" && current.Destination != desiredFunnelDestination(svc) {
 		return false
 	}
@@ -120,8 +145,77 @@ func managedFunnelPortSet(ports map[string]struct{}) map[string]struct{} {
 	return cloned
 }
 
+func parseFunnelStatus(status FunnelStatus) map[string]CurrentFunnel {
+	funnels := make(map[string]CurrentFunnel)
+	for hostPort := range status.AllowFunnel {
+		port := extractPort(hostPort)
+		if port == "" {
+			continue
+		}
+
+		current := funnels[port]
+		current.PublicPort = port
+		current.Protocol = detectFunnelProtocol(status.TCP[port])
+		funnels[port] = current
+
+		log.Debug().
+			Str("host_port", hostPort).
+			Str("port", port).
+			Msg("Detected active funnel")
+	}
+
+	for port, tcpConfig := range status.TCP {
+		protocol := detectFunnelProtocol(tcpConfig)
+		key := funnelKey(port, "", protocol)
+		current := funnels[key]
+		if existing, ok := funnels[port]; ok {
+			current = existing
+			delete(funnels, port)
+		}
+		current.PublicPort = port
+		if current.Protocol == "" {
+			current.Protocol = protocol
+		}
+		if isHTTPFunnelProtocol(current.Protocol) {
+			current.Path = normalizeFunnelPath(current.Path)
+		}
+		funnels[key] = current
+	}
+
+	for webKey, webConfig := range status.Web {
+		port := extractPort(webKey)
+		if port == "" {
+			continue
+		}
+
+		for path, handler := range webConfig.Handlers {
+			if handler.Proxy == "" {
+				continue
+			}
+
+			normalizedPath := normalizeFunnelPath(path)
+			key := funnelKey(port, normalizedPath, "https")
+			current := funnels[key]
+			if existing, ok := funnels[port]; ok {
+				current = existing
+				delete(funnels, port)
+			}
+			current.PublicPort = port
+			current.Path = normalizedPath
+			if current.Protocol == "" {
+				current.Protocol = "https"
+			}
+			current.Destination = handler.Proxy
+			funnels[key] = current
+		}
+	}
+
+	return funnels
+}
+
 // getCurrentFunnels retrieves the current funnel status
-// Returns a map keyed by public port (for example "443").
+// Returns a map keyed by public port for TCP-style funnels and public port plus
+// path for HTTP(S) funnels.
 func (c *Client) getCurrentFunnels(ctx context.Context) (map[string]CurrentFunnel, error) {
 	cmd := c.tailscaleCmd(ctx, "funnel", "status", "--json")
 	output, err := cmd.CombinedOutput()
@@ -156,47 +250,7 @@ func (c *Client) getCurrentFunnels(ctx context.Context) (map[string]CurrentFunne
 		return make(map[string]CurrentFunnel), nil
 	}
 
-	funnels := make(map[string]CurrentFunnel)
-	for hostPort := range status.AllowFunnel {
-		port := extractPort(hostPort)
-		if port == "" {
-			continue
-		}
-
-		current := funnels[port]
-		current.PublicPort = port
-		current.Protocol = detectFunnelProtocol(status.TCP[port])
-		funnels[port] = current
-
-		log.Debug().
-			Str("host_port", hostPort).
-			Str("port", port).
-			Msg("Detected active funnel")
-	}
-
-	for port, tcpConfig := range status.TCP {
-		current := funnels[port]
-		current.PublicPort = port
-		if current.Protocol == "" {
-			current.Protocol = detectFunnelProtocol(tcpConfig)
-		}
-		funnels[port] = current
-	}
-
-	for webKey, webConfig := range status.Web {
-		port := extractPort(webKey)
-		if port == "" {
-			continue
-		}
-
-		current := funnels[port]
-		current.PublicPort = port
-		if current.Protocol == "" {
-			current.Protocol = "https"
-		}
-		current.Destination = firstProxy(webConfig)
-		funnels[port] = current
-	}
+	funnels := parseFunnelStatus(status)
 
 	log.Debug().
 		Int("funnel_count", len(funnels)).
@@ -219,31 +273,33 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 		currentFunnels = make(map[string]CurrentFunnel)
 	}
 
-	// Build map of desired funnels and check for duplicate funnel-ports
-	// Tailscale limitation: only ONE funnel can be active per funnel-port
+	// Build map of desired funnels and check for duplicate funnel targets.
+	// HTTP(S) funnels can share a public port when their paths differ. TCP-style
+	// funnels are still limited to one active funnel per public port.
 	desiredFunnels := make(map[string]*apptypes.ContainerService)
 	funnelPortUsage := make(map[string]string) // funnel-port -> container name
 	var duplicatePortErrors []string
 
 	for _, svc := range desiredServices {
 		if svc.FunnelEnabled {
-			key := svc.FunnelFunnelPort
+			key := desiredFunnelKey(svc)
 			desiredFunnels[key] = svc
 
-			// Check for duplicate funnel-port usage
-			if existingContainer, exists := funnelPortUsage[svc.FunnelFunnelPort]; exists {
+			// Check for duplicate funnel destination usage.
+			if existingContainer, exists := funnelPortUsage[key]; exists {
 				errMsg := fmt.Sprintf(
-					"funnel-port %s conflict: containers '%s' and '%s' cannot share the same funnel-port (Tailscale limitation: only ONE funnel per port)",
-					svc.FunnelFunnelPort, existingContainer, svc.ContainerName,
+					"funnel target %s conflict: containers '%s' and '%s' cannot share the same public funnel endpoint",
+					key, existingContainer, svc.ContainerName,
 				)
 				duplicatePortErrors = append(duplicatePortErrors, errMsg)
 				log.Error().
 					Str("funnel_port", svc.FunnelFunnelPort).
+					Str("funnel_path", svc.FunnelPath).
 					Str("container1", existingContainer).
 					Str("container2", svc.ContainerName).
-					Msg("Duplicate funnel-port detected - only one funnel can be active per port")
+					Msg("Duplicate funnel target detected")
 			} else {
-				funnelPortUsage[svc.FunnelFunnelPort] = svc.ContainerName
+				funnelPortUsage[key] = svc.ContainerName
 			}
 		}
 	}
@@ -253,21 +309,21 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 		for _, errMsg := range duplicatePortErrors {
 			log.Error().Msg(errMsg)
 		}
-		return fmt.Errorf("funnel configuration error: %d containers have conflicting funnel-ports (only ONE funnel allowed per port)", len(duplicatePortErrors))
+		return fmt.Errorf("funnel configuration error: %d containers have conflicting funnel endpoints", len(duplicatePortErrors))
 	}
 
 	previouslyManaged := managedFunnelPortSet(c.managedFunnels)
 	staleManagedFunnels := make([]string, 0)
 	unmanagedCurrentFunnels := make([]string, 0)
 
-	for publicPort := range currentFunnels {
-		if _, managed := previouslyManaged[publicPort]; managed {
-			if _, desired := desiredFunnels[publicPort]; !desired {
-				staleManagedFunnels = append(staleManagedFunnels, publicPort)
+	for currentKey := range currentFunnels {
+		if _, managed := previouslyManaged[currentKey]; managed {
+			if _, desired := desiredFunnels[currentKey]; !desired {
+				staleManagedFunnels = append(staleManagedFunnels, currentKey)
 			}
 			continue
 		}
-		unmanagedCurrentFunnels = append(unmanagedCurrentFunnels, publicPort)
+		unmanagedCurrentFunnels = append(unmanagedCurrentFunnels, currentKey)
 	}
 
 	if len(staleManagedFunnels) > 0 {
@@ -292,21 +348,23 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 	// Find funnels to add or update.
 	var applyErrors []error
 	successfulFunnels := make(map[string]struct{}, len(desiredFunnels)+len(staleManagedFunnels))
-	for publicPort, svc := range desiredFunnels {
-		current, exists := currentFunnels[publicPort]
+	for key, svc := range desiredFunnels {
+		current, exists := currentFunnels[key]
 
 		if exists && currentFunnelMatchesDesired(current, svc) {
 			log.Debug().
 				Str("container", svc.ContainerName).
 				Str("public_port", svc.FunnelFunnelPort).
+				Str("funnel_path", svc.FunnelPath).
 				Msg("Funnel already configured correctly")
-			successfulFunnels[publicPort] = struct{}{}
+			successfulFunnels[key] = struct{}{}
 			continue
 		}
 
 		log.Info().
 			Str("container", svc.ContainerName).
 			Str("public_port", svc.FunnelFunnelPort).
+			Str("funnel_path", svc.FunnelPath).
 			Msg("Enabling funnel")
 
 		if err := c.addFunnel(ctx, svc); err != nil {
@@ -314,15 +372,15 @@ func (c *Client) reconcileFunnels(ctx context.Context, desiredServices []*apptyp
 				Err(err).
 				Str("container", svc.ContainerName).
 				Msg("Failed to enable funnel")
-			applyErrors = append(applyErrors, fmt.Errorf("%s:%s: %w", svc.ContainerName, publicPort, err))
+			applyErrors = append(applyErrors, fmt.Errorf("%s:%s: %w", svc.ContainerName, key, err))
 			continue
 		}
 
-		successfulFunnels[publicPort] = struct{}{}
+		successfulFunnels[key] = struct{}{}
 	}
 
-	for _, publicPort := range staleManagedFunnels {
-		successfulFunnels[publicPort] = struct{}{}
+	for _, key := range staleManagedFunnels {
+		successfulFunnels[key] = struct{}{}
 	}
 	c.managedFunnels = successfulFunnels
 
@@ -352,7 +410,8 @@ func (c *Client) addFunnel(ctx context.Context, svc *apptypes.ContainerService) 
 	case "https", "http":
 		// HTTPS funnel: tailscale funnel --bg --https=<funnel-port> http://localhost:<host-port>
 		portArg := fmt.Sprintf("--https=%s", svc.FunnelFunnelPort)
-		cmd = c.tailscaleCmd(ctx, "funnel", "--bg", portArg, funnelDestination)
+		pathArg := fmt.Sprintf("--set-path=%s", normalizeFunnelPath(svc.FunnelPath))
+		cmd = c.tailscaleCmd(ctx, "funnel", "--bg", portArg, pathArg, funnelDestination)
 
 	case "tcp":
 		// TCP funnel: tailscale funnel --bg --tcp=<funnel-port> tcp://localhost:<host-port>
@@ -377,6 +436,7 @@ func (c *Client) addFunnel(ctx context.Context, svc *apptypes.ContainerService) 
 		Str("funnel_container_port", svc.FunnelPort).
 		Str("funnel_host_port", svc.FunnelTargetPort).
 		Str("funnel_public_port", svc.FunnelFunnelPort).
+		Str("funnel_path", svc.FunnelPath).
 		Str("destination", funnelDestination).
 		Msg("Executing tailscale funnel command (uses machine hostname, not service name)")
 
@@ -399,7 +459,7 @@ func (c *Client) addFunnel(ctx context.Context, svc *apptypes.ContainerService) 
 		return fmt.Errorf("funnel command succeeded but status verification failed: %w", verifyErr)
 	}
 
-	current, exists := currentFunnels[svc.FunnelFunnelPort]
+	current, exists := currentFunnels[desiredFunnelKey(svc)]
 	if !exists || !currentFunnelMatchesDesired(current, svc) {
 		stderr := string(output)
 		if isFunnelACLError(stderr) {
@@ -411,14 +471,15 @@ func (c *Client) addFunnel(ctx context.Context, svc *apptypes.ContainerService) 
 			)
 		}
 		return fmt.Errorf(
-			"tailscale funnel command completed but the requested public port %s is not active.\nOutput: %s",
-			svc.FunnelFunnelPort, stderr,
+			"tailscale funnel command completed but the requested public endpoint %s is not active.\nOutput: %s",
+			desiredFunnelEndpoint(svc), stderr,
 		)
 	}
 
 	log.Info().
 		Str("container", svc.ContainerName).
 		Str("public_port", svc.FunnelFunnelPort).
+		Str("funnel_path", svc.FunnelPath).
 		Str("protocol", svc.FunnelProtocol).
 		Msg("Funnel enabled - publicly accessible at https://<machine-hostname>.<tailnet>.ts.net:" + svc.FunnelFunnelPort)
 

@@ -66,10 +66,13 @@ Funnel exposes a service to the public internet. It can be used together with a 
 | `docktail.funnel.port` | Yes | - | Backend container port for Funnel traffic. |
 | `docktail.funnel.funnel-port` | No | `443` | Public Funnel port. HTTPS/HTTP Funnel supports `443`, `8443`, or `10000`. |
 | `docktail.funnel.protocol` | No | `https` | Funnel protocol: `http`, `https`, `tcp`, or `tls-terminated-tcp`. |
+| `docktail.funnel.path` | No | `/` | HTTP(S) Funnel path. Must start with `/`. |
 
 Funnel notes:
 
-- Tailscale supports only one active Funnel per public port on a node.
+- HTTP(S) Funnels can share a public port when each Funnel uses a different `docktail.funnel.path`.
+- TCP and TLS-terminated TCP Funnels support only one active Funnel per public port on a node.
+- `docktail.funnel.path` is only valid for HTTP(S) Funnels.
 - Funnel URLs use the machine hostname, not the Tailscale service name.
 - Funnel-only containers can omit `docktail.service.enable` and other `docktail.service.*` labels.
 - `docktail.service.direct` and `docktail.service.network` still control how DockTail reaches the backend for Funnel traffic.
