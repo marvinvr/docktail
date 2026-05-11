@@ -20,6 +20,18 @@ environment:
   - TAILSCALE_OAUTH_CLIENT_SECRET=your-client-secret
 ```
 
+Or mount the credentials as files:
+
+```yaml
+services:
+  docktail:
+    volumes:
+      - ./secrets:/run/secrets/docktail:ro
+    environment:
+      - FILE__TAILSCALE_OAUTH_CLIENT_ID=/run/secrets/docktail/tailscale_oauth_client_id
+      - TAILSCALE_OAUTH_CLIENT_SECRET_FILE=/run/secrets/docktail/tailscale_oauth_client_secret
+```
+
 If OAuth and API key credentials are both configured, DockTail uses OAuth.
 
 ### API Key
@@ -30,6 +42,8 @@ An API key also enables automatic service creation, but Tailscale API keys expir
 environment:
   - TAILSCALE_API_KEY=tskey-api-...
 ```
+
+API keys can also be loaded from `FILE__TAILSCALE_API_KEY` or `TAILSCALE_API_KEY_FILE`.
 
 ### Manual Mode
 

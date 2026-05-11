@@ -29,9 +29,9 @@ func main() {
 	tailscaleSocket := getEnv("TAILSCALE_SOCKET", "/var/run/tailscale/tailscaled.sock")
 
 	// Control Plane Configuration
-	tailscaleAPIKey := getEnv("TAILSCALE_API_KEY", "")
-	tailscaleOAuthClientID := getEnv("TAILSCALE_OAUTH_CLIENT_ID", "")
-	tailscaleOAuthClientSecret := getEnv("TAILSCALE_OAUTH_CLIENT_SECRET", "")
+	tailscaleAPIKey := getSecretEnv("TAILSCALE_API_KEY", "")
+	tailscaleOAuthClientID := getSecretEnv("TAILSCALE_OAUTH_CLIENT_ID", "")
+	tailscaleOAuthClientSecret := getSecretEnv("TAILSCALE_OAUTH_CLIENT_SECRET", "")
 	tailscaleTailnet := getEnv("TAILSCALE_TAILNET", "-")
 	defaultTagsStr := getEnv("DEFAULT_SERVICE_TAGS", "tag:container")
 	ignoreServiceNamesStr := getEnv("IGNORE_SERVICE_NAMES", "")
@@ -168,6 +168,40 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getSecretEnv(key, defaultValue string) string {
+	if value := os.Getenv(key); value != "" {
+		return value
+	}
+
+	for _, fileKey := range []string{"FILE__" + key, key + "_FILE"} {
+		value, ok := getEnvFileValue(fileKey)
+		if ok {
+			return value
+		}
+	}
+
+	return defaultValue
+}
+
+func getEnvFileValue(fileKey string) (string, bool) {
+	path := strings.TrimSpace(os.Getenv(fileKey))
+	if path == "" {
+		return "", false
+	}
+
+	content, err := os.ReadFile(path)
+	if err != nil {
+		log.Fatal().
+			Err(err).
+			Str("file_env", fileKey).
+			Str("path", path).
+			Msg("Failed to read environment variable file")
+		return "", true
+	}
+
+	return strings.TrimRight(string(content), "\r\n"), true
 }
 
 func getEnvDuration(key string, defaultValue time.Duration) time.Duration {

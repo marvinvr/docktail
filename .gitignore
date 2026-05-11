@@ -97,6 +97,7 @@ go.work.sum
 
 # env file
 .env
+.e2e-secrets/
 
 # Generated website documentation
 website/docs/

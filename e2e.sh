@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
 COMPOSE_FILE="docker-compose.e2e.yaml"
+E2E_SECRETS_DIR=".e2e-secrets"
 TS_CONTAINER="e2e-tailscale"
 DOCKTAIL_CONTAINER="e2e-docktail"
 MAX_WAIT=120
@@ -27,6 +28,7 @@ cleanup() {
     log "Cleaning up"
     kill "$TIMEOUT_PID" 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
+    rm -rf "$E2E_SECRETS_DIR"
 }
 trap cleanup EXIT
 
@@ -78,6 +80,13 @@ else
     echo "ERROR: Either TS_AUTHKEY or TS_OAUTH_CLIENT_ID + TS_OAUTH_CLIENT_SECRET is required"
     exit 1
 fi
+
+mkdir -p "$E2E_SECRETS_DIR"
+chmod 700 "$E2E_SECRETS_DIR"
+printf '%s\n' "${TS_OAUTH_CLIENT_ID:-}" > "$E2E_SECRETS_DIR/tailscale_oauth_client_id"
+printf '%s\n' "${TS_OAUTH_CLIENT_SECRET:-}" > "$E2E_SECRETS_DIR/tailscale_oauth_client_secret"
+chmod 600 "$E2E_SECRETS_DIR/tailscale_oauth_client_id" "$E2E_SECRETS_DIR/tailscale_oauth_client_secret"
+echo "  DockTail OAuth credentials prepared as file-backed secrets"
 
 # ==============================================================================
 # Helpers

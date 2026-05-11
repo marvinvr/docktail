@@ -38,13 +38,14 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ts-socket:/var/run/tailscale
+      - ./.e2e-secrets:/run/secrets/docktail:ro
     environment:
       - LOG_LEVEL=debug
       - RECONCILE_INTERVAL=5s
       - DEFAULT_SERVICE_TAGS=tag:ci-test-container
       - IGNORE_SERVICE_NAMES=e2e-manual-protected
-      - TAILSCALE_OAUTH_CLIENT_ID=${TS_OAUTH_CLIENT_ID:-}
-      - TAILSCALE_OAUTH_CLIENT_SECRET=${TS_OAUTH_CLIENT_SECRET:-}
+      - FILE__TAILSCALE_OAUTH_CLIENT_ID=/run/secrets/docktail/tailscale_oauth_client_id
+      - TAILSCALE_OAUTH_CLIENT_SECRET_FILE=/run/secrets/docktail/tailscale_oauth_client_secret
       - TAILSCALE_TAILNET=${TS_TAILNET:-}
 
   # ============================================================================
