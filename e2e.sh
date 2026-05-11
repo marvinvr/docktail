@@ -242,7 +242,7 @@ assert_funnel_path() {
     local path="$2"
     local funnel_status
     funnel_status=$(get_funnel_status)
-    if echo "$funnel_status" | jq -e --arg port "$port" --arg path "$path" '.Web | to_entries[] | select(.key | endswith(":" + $port)) | .value.Handlers[$path].Proxy? // empty' >/dev/null 2>&1; then
+    if echo "$funnel_status" | jq -e --arg port "$port" --arg path "$path" '.Web | to_entries[] | select(.key | endswith(":" + $port)) | .value.Handlers[$path].Proxy? | strings | select(length > 0)' >/dev/null 2>&1; then
         pass "funnel path $path active on port $port"
     else
         fail "funnel path $path not found on port $port"

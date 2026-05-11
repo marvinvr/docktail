@@ -166,6 +166,11 @@ func parseFunnelStatus(status FunnelStatus) map[string]CurrentFunnel {
 
 	for port, tcpConfig := range status.TCP {
 		protocol := detectFunnelProtocol(tcpConfig)
+		if isHTTPFunnelProtocol(protocol) {
+			delete(funnels, port)
+			continue
+		}
+
 		key := funnelKey(port, "", protocol)
 		current := funnels[key]
 		if existing, ok := funnels[port]; ok {
@@ -175,9 +180,6 @@ func parseFunnelStatus(status FunnelStatus) map[string]CurrentFunnel {
 		current.PublicPort = port
 		if current.Protocol == "" {
 			current.Protocol = protocol
-		}
-		if isHTTPFunnelProtocol(current.Protocol) {
-			current.Path = normalizeFunnelPath(current.Path)
 		}
 		funnels[key] = current
 	}

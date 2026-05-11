@@ -375,12 +375,12 @@ func (c *Client) parseFunnelConfig(cctx *containerCtx, labels map[string]string)
 	}
 
 	funnelPathLabel, hasFunnelPath := labels[apptypes.LabelFunnelPath]
+	if hasFunnelPath && (funnelProtocol == "tcp" || funnelProtocol == "tls-terminated-tcp") {
+		return nil, fmt.Errorf("%s is only supported for HTTP/HTTPS funnels", apptypes.LabelFunnelPath)
+	}
 	funnelPath, err := parseFunnelPath(funnelPathLabel)
 	if err != nil {
 		return nil, err
-	}
-	if hasFunnelPath && (funnelProtocol == "tcp" || funnelProtocol == "tls-terminated-tcp") {
-		return nil, fmt.Errorf("%s is only supported for HTTP/HTTPS funnels", apptypes.LabelFunnelPath)
 	}
 
 	funnelDestIP, funnelTargetPort, err := c.resolveDestPort(cctx, funnelPort)

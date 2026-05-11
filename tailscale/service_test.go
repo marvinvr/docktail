@@ -321,6 +321,11 @@ func TestParseFunnelStatus(t *testing.T) {
 			key:         "443",
 			wantPresent: false,
 		},
+		{
+			name:        "no phantom root entry when only non-root handler exists",
+			key:         "8443|/",
+			wantPresent: false,
+		},
 	}
 
 	for _, tt := range tests {
