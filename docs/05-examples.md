@@ -51,7 +51,7 @@ services:
 
 Access 
 - https at `https://forgejo.your-tailnet.ts.net` 
-- ssh at `ssh -T git@forgejo.your-tailnet.ts.net`
+- ssh at `ssh -T -l git forgejo.your-tailnet.ts.net`
 
 ### Database Over TCP
 
