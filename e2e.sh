@@ -538,10 +538,53 @@ assert_service_not_exists   "e2e-ignored"    # still ignored
 assert_service_not_exists   "e2e-manual-protected"  # cleaned up explicitly
 
 # ==============================================================================
-# 12. Log Health
+# 12. TCP Reconciliation Stability (issue #56)
+# ==============================================================================
+#
+# Regression test for https://github.com/marvinvr/docktail/issues/56:
+# TCP services were detected as "changed" on every reconciliation cycle because
+# the current destination could not be parsed from the Tailscale serve status
+# (the TCP forward target lives on the TCP handler, not in the Web section).
+# This caused DockTail to re-add the TCP service on every reconciliation cycle,
+# even though the live configuration already matched the desired state.
+#
+# A correctly reconciling TCP service is flagged as "changed" zero times once it
+# has been established. We measure the number of "Service configuration changed"
+# log lines for the TCP service over several reconciliation cycles; with the bug
+# present the count grows by one per cycle, with the fix it stays flat.
+
+log "12. TCP Reconciliation Stability (issue #56)"
+
+tcp_changed_key="key=svc:e2e-proto-tcp:5432"
+
+count_tcp_changed() {
+    docker logs "$DOCKTAIL_CONTAINER" 2>&1 \
+        | grep "Service configuration changed, will update" \
+        | grep -c -- "$tcp_changed_key" || true
+}
+
+echo "  --- Pre-check: TCP service exists ---"
+refresh_serve_status
+assert_service_exists       "e2e-proto-tcp"
+assert_service_protocol     "e2e-proto-tcp" "tcp"
+
+echo "  Measuring TCP reconciliation stability across multiple cycles..."
+before_changed=$(count_tcp_changed)
+sleep 16   # >= 3 reconcile cycles at RECONCILE_INTERVAL=5s
+after_changed=$(count_tcp_changed)
+changed_delta=$((after_changed - before_changed))
+
+if [ "$changed_delta" -le 0 ]; then
+    pass "TCP service stable: not re-detected as changed across cycles (delta=$changed_delta)"
+else
+    fail "TCP service re-detected as changed $changed_delta time(s) across reconcile cycles (issue #56: TCP services re-added every reconciliation)"
+fi
+
+# ==============================================================================
+# 13. Log Health
 # ==============================================================================
 
-log "12. DockTail Log Health"
+log "13. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if grep -qE "FATAL|panic" <<<"$docktail_logs"; then
