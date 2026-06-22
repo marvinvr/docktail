@@ -43,40 +43,32 @@ func (c *Client) GetCurrentServices(ctx context.Context) (map[string]ServiceEndp
 		Int("total_services_in_status", len(status.Services)).
 		Msg("Parsed Tailscale status JSON")
 
+	services := parseManagedServices(status)
+
+	log.Info().
+		Int("service_count", len(services)).
+		Msg("Retrieved current Tailscale services")
+
+	return services, nil
+}
+
+// parseManagedServices extracts the DockTail-managed service endpoints from a
+// parsed Tailscale serve status. It is kept separate from the CLI invocation so
+// the parsing logic (in particular how destinations are resolved per protocol)
+// can be unit tested directly.
+func parseManagedServices(status TailscaleStatus) map[string]ServiceEndpoint {
 	services := make(map[string]ServiceEndpoint)
 
-	// Parse each service
 	for serviceName, svcConfig := range status.Services {
 		// Only process services we manage (with svc: prefix)
 		if !isManagedService(serviceName) {
 			continue
 		}
 
-		// Parse TCP config to get port and protocol
+		// Parse TCP config to get port, protocol and destination
 		for port, tcpConfig := range svcConfig.TCP {
-			var protocol string
-			if tcpConfig.HTTPS {
-				protocol = "https"
-			} else if tcpConfig.HTTP {
-				protocol = "http"
-			} else {
-				protocol = "tcp"
-			}
-
-			// Get destination from Web config
-			var destination string
-			for webKey, webConfig := range svcConfig.Web {
-				// Find the matching port in the web key
-				if strings.Contains(webKey, ":"+port) {
-					for _, handler := range webConfig.Handlers {
-						if handler.Proxy != "" {
-							destination = handler.Proxy
-							break
-						}
-					}
-					break
-				}
-			}
+			protocol := serviceProtocol(tcpConfig)
+			destination := serviceDestination(svcConfig, port, tcpConfig)
 
 			// Create a unique key for this service+port combination
 			key := fmt.Sprintf("%s:%s", serviceName, port)
@@ -97,11 +89,45 @@ func (c *Client) GetCurrentServices(ctx context.Context) (map[string]ServiceEndp
 		}
 	}
 
-	log.Info().
-		Int("service_count", len(services)).
-		Msg("Retrieved current Tailscale services")
+	return services
+}
 
-	return services, nil
+// serviceProtocol maps a TCP handler's flags to the DockTail protocol name.
+func serviceProtocol(tcpConfig TailscaleTCPConfig) string {
+	switch {
+	case tcpConfig.HTTPS:
+		return "https"
+	case tcpConfig.HTTP:
+		return "http"
+	default:
+		return "tcp"
+	}
+}
+
+// serviceDestination resolves the backend destination for a service endpoint.
+// HTTP/HTTPS endpoints proxy through the Web handler config, whereas plain-TCP
+// endpoints forward directly via the TCP handler's TCPForward field. Previously
+// the destination was only read from the Web section, which is empty for plain
+// TCP services; that left their destination empty and made reconciliation treat
+// every TCP service as changed, re-adding it on each cycle (issue #56).
+func serviceDestination(svcConfig TailscaleService, port string, tcpConfig TailscaleTCPConfig) string {
+	if !tcpConfig.HTTP && !tcpConfig.HTTPS {
+		return tcpConfig.TCPForward
+	}
+
+	for webKey, webConfig := range svcConfig.Web {
+		// Find the matching port in the web key
+		if strings.Contains(webKey, ":"+port) {
+			for _, handler := range webConfig.Handlers {
+				if handler.Proxy != "" {
+					return handler.Proxy
+				}
+			}
+			break
+		}
+	}
+
+	return ""
 }
 
 // addService adds a single service using Tailscale CLI

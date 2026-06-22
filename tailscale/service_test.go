@@ -102,7 +102,7 @@ func TestTailscaleStatusParsing(t *testing.T) {
 				"Services": {
 					"svc:db": {
 						"TCP": {
-							"5432": {}
+							"5432": {"TCPForward": "172.17.0.5:5432"}
 						},
 						"Web": {}
 					}
@@ -114,6 +114,9 @@ func TestTailscaleStatusParsing(t *testing.T) {
 				tcpCfg := svc.TCP["5432"]
 				if tcpCfg.HTTP || tcpCfg.HTTPS {
 					t.Error("expected both HTTP and HTTPS to be false for TCP service")
+				}
+				if tcpCfg.TCPForward != "172.17.0.5:5432" {
+					t.Errorf("expected TCPForward 172.17.0.5:5432, got %q", tcpCfg.TCPForward)
 				}
 			},
 		},
@@ -155,6 +158,116 @@ func TestTailscaleStatusParsing(t *testing.T) {
 			}
 			if tt.checkFunc != nil {
 				tt.checkFunc(t, status)
+			}
+		})
+	}
+}
+
+func TestParseManagedServicesDestinations(t *testing.T) {
+	status := TailscaleStatus{
+		Services: map[string]TailscaleService{
+			"svc:web": {
+				TCP: map[string]TailscaleTCPConfig{
+					"443": {HTTPS: true},
+				},
+				Web: map[string]TailscaleWebConfig{
+					"https://svc:web:443": {
+						Handlers: map[string]TailscaleHandler{
+							"/": {Proxy: "http://172.17.0.2:8080"},
+						},
+					},
+				},
+			},
+			"svc:db": {
+				// Plain TCP service: destination lives on the TCP handler as
+				// TCPForward, and the Web section is empty (issue #56).
+				TCP: map[string]TailscaleTCPConfig{
+					"5432": {TCPForward: "172.17.0.3:5432"},
+				},
+				Web: map[string]TailscaleWebConfig{},
+			},
+			"manual-service": {
+				// Not managed by DockTail (no svc: prefix) -> ignored.
+				TCP: map[string]TailscaleTCPConfig{
+					"8080": {HTTP: true},
+				},
+			},
+		},
+	}
+
+	got := parseManagedServices(status)
+
+	if _, ok := got["manual-service:8080"]; ok {
+		t.Error("expected unmanaged service to be excluded")
+	}
+
+	web, ok := got["svc:web:443"]
+	if !ok {
+		t.Fatal("expected svc:web:443 endpoint")
+	}
+	if web.Protocol != "https" {
+		t.Errorf("svc:web protocol = %q, want https", web.Protocol)
+	}
+	if web.Destination != "http://172.17.0.2:8080" {
+		t.Errorf("svc:web destination = %q, want http://172.17.0.2:8080", web.Destination)
+	}
+
+	db, ok := got["svc:db:5432"]
+	if !ok {
+		t.Fatal("expected svc:db:5432 endpoint")
+	}
+	if db.Protocol != "tcp" {
+		t.Errorf("svc:db protocol = %q, want tcp", db.Protocol)
+	}
+	// The regression: TCP destination must be parsed from TCPForward, not left empty.
+	if db.Destination != "172.17.0.3:5432" {
+		t.Errorf("svc:db destination = %q, want 172.17.0.3:5432 (issue #56)", db.Destination)
+	}
+}
+
+func TestSameDestination(t *testing.T) {
+	tests := []struct {
+		name     string
+		current  string
+		expected string
+		want     bool
+	}{
+		{
+			name:     "tcp forward without scheme matches expected tcp url",
+			current:  "172.17.0.3:5432",
+			expected: "tcp://172.17.0.3:5432",
+			want:     true,
+		},
+		{
+			name:     "http destinations with matching scheme",
+			current:  "http://172.17.0.2:8080",
+			expected: "http://172.17.0.2:8080",
+			want:     true,
+		},
+		{
+			name:     "backend scheme change is detected",
+			current:  "http://172.17.0.2:8080",
+			expected: "https://172.17.0.2:8080",
+			want:     false,
+		},
+		{
+			name:     "different host:port never matches",
+			current:  "172.17.0.3:5432",
+			expected: "tcp://172.17.0.9:5432",
+			want:     false,
+		},
+		{
+			name:     "empty current forces reapply",
+			current:  "",
+			expected: "tcp://172.17.0.3:5432",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sameDestination(tt.current, tt.expected); got != tt.want {
+				t.Errorf("sameDestination(%q, %q) = %v, want %v", tt.current, tt.expected, got, tt.want)
 			}
 		})
 	}

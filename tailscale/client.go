@@ -120,6 +120,10 @@ type TailscaleService struct {
 type TailscaleTCPConfig struct {
 	HTTP  bool `json:"HTTP"`
 	HTTPS bool `json:"HTTPS"`
+	// TCPForward is the backend address ("host:port") for plain-TCP service
+	// endpoints. HTTP/HTTPS endpoints leave this empty and store their backend
+	// in the Web handler config instead.
+	TCPForward string `json:"TCPForward"`
 }
 
 type TailscaleWebConfig struct {
@@ -183,7 +187,7 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		} else {
 			// Service exists - check if configuration changed
 			expectedDest := buildDestination(desired)
-			if current.Destination != expectedDest || current.Protocol != desired.ServiceProtocol {
+			if !sameDestination(current.Destination, expectedDest) || current.Protocol != desired.ServiceProtocol {
 				toAdd[key] = desired
 				log.Info().
 					Str("key", key).

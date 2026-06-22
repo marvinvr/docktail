@@ -120,6 +120,33 @@ func (c *Client) shouldIgnoreService(serviceName string) bool {
 	return ok
 }
 
+// sameDestination reports whether two service destinations point to the same
+// backend. Tailscale records plain-TCP forwards as "host:port" (without a
+// scheme) in `serve status`, whereas HTTP/HTTPS handlers and buildDestination
+// include a "proto://" prefix. The service protocol is compared separately
+// during reconciliation, so the scheme is only compared when present on both
+// sides; the host:port must always match.
+func sameDestination(current, expected string) bool {
+	curScheme, curHostPort := splitScheme(current)
+	expScheme, expHostPort := splitScheme(expected)
+	if curHostPort != expHostPort {
+		return false
+	}
+	if curScheme != "" && expScheme != "" {
+		return curScheme == expScheme
+	}
+	return true
+}
+
+// splitScheme separates an optional "scheme://" prefix from a destination,
+// returning the scheme (without "://") and the remaining "host:port".
+func splitScheme(dest string) (scheme, hostPort string) {
+	if i := strings.Index(dest, "://"); i >= 0 {
+		return dest[:i], dest[i+3:]
+	}
+	return "", dest
+}
+
 // buildDestination constructs the destination URL for a service
 func buildDestination(svc *apptypes.ContainerService) string {
 	// Use the service protocol directly in the destination URL
