@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -35,6 +36,7 @@ func main() {
 	tailscaleTailnet := getEnv("TAILSCALE_TAILNET", "-")
 	defaultTagsStr := getEnv("DEFAULT_SERVICE_TAGS", "tag:container")
 	ignoreServiceNamesStr := getEnv("IGNORE_SERVICE_NAMES", "")
+	deleteUnusedServices := getEnvBool("DELETE_UNUSED_SERVICES", false)
 
 	// Parse default tags
 	var defaultTags []string
@@ -62,6 +64,14 @@ func main() {
 
 	logCredentialWarnings(tailscaleAPIKey, tailscaleOAuthClientID, tailscaleOAuthClientSecret)
 
+	// The unused-service cleanup relies on the Control Plane API to inspect and
+	// delete service definitions. Without credentials it can never run, so warn
+	// loudly rather than silently ignoring the opt-in.
+	if deleteUnusedServices && apiSyncMethod == "disabled" {
+		log.Warn().
+			Msg("DELETE_UNUSED_SERVICES is enabled but no Tailscale API credentials are configured; unused-service cleanup will be skipped")
+	}
+
 	log.Info().
 		Dur("reconcile_interval", reconcileInterval).
 		Str("tailscale_socket", tailscaleSocket).
@@ -69,6 +79,7 @@ func main() {
 		Str("tailnet", tailscaleTailnet).
 		Strs("default_tags", defaultTags).
 		Strs("ignore_service_names", ignoreServiceNames).
+		Bool("delete_unused_services", deleteUnusedServices).
 		Msg("Configuration loaded")
 
 	// Create Docker client
@@ -82,12 +93,13 @@ func main() {
 
 	// Create Tailscale client
 	tailscaleClient := tailscale.NewClient(tailscale.ClientConfig{
-		SocketPath:         tailscaleSocket,
-		Tailnet:            tailscaleTailnet,
-		APIKey:             tailscaleAPIKey,
-		OAuthClientID:      tailscaleOAuthClientID,
-		OAuthClientSecret:  tailscaleOAuthClientSecret,
-		IgnoreServiceNames: ignoreServiceNames,
+		SocketPath:           tailscaleSocket,
+		Tailnet:              tailscaleTailnet,
+		APIKey:               tailscaleAPIKey,
+		OAuthClientID:        tailscaleOAuthClientID,
+		OAuthClientSecret:    tailscaleOAuthClientSecret,
+		IgnoreServiceNames:   ignoreServiceNames,
+		DeleteUnusedServices: deleteUnusedServices,
 	})
 
 	// Detect CLI/daemon version mismatch (common with host-mode Tailscale)
@@ -214,6 +226,20 @@ func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
 			Str("value", value).
 			Dur("default", defaultValue).
 			Msg("Failed to parse duration, using default")
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			return parsed
+		}
+		log.Warn().
+			Str("key", key).
+			Str("value", value).
+			Bool("default", defaultValue).
+			Msg("Failed to parse bool, using default")
 	}
 	return defaultValue
 }

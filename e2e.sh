@@ -9,6 +9,12 @@ RECONCILE_WAIT=10
 SCRIPT_TIMEOUT=600
 MANUAL_PROTECTED_SERVICE_NAME="svc:e2e-manual-protected"
 MANUAL_PROTECTED_SERVICE_PORT="80"
+# Control-plane cleanup test fixtures (created directly via the Tailscale API)
+ORPHAN_SERVICE_NAME="svc:e2e-orphan"           # never advertised -> DockTail should delete it
+OTHERHOST_SERVICE_NAME="svc:e2e-otherhost"     # advertised by the node -> DockTail must keep it
+OTHERHOST_SERVICE_PORT="80"
+API_TAILNET="${TS_TAILNET:--}"
+API_BASE="https://api.tailscale.com/api/v2"
 
 # Kill the script if it runs longer than SCRIPT_TIMEOUT seconds
 ( sleep "$SCRIPT_TIMEOUT" && echo "ERROR: E2E script timed out after ${SCRIPT_TIMEOUT}s" && kill $$ ) 2>/dev/null &
@@ -28,6 +34,7 @@ cleanup() {
     log "Cleaning up"
     kill "$TIMEOUT_PID" 2>/dev/null || true
     docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
+    sweep_e2e_services
     rm -rf "$E2E_SECRETS_DIR"
 }
 trap cleanup EXIT
@@ -266,6 +273,103 @@ wait_for_docktail_log() {
     done
 
     fail "docktail log missing '$pattern'"
+    return 1
+}
+
+# --- Tailscale Control Plane API helpers (for unused-service cleanup tests) ---
+
+# Mint a fresh OAuth access token. Echoes the token, or empty if no creds.
+mint_api_token() {
+    if [ -z "${TS_OAUTH_CLIENT_ID:-}" ] || [ -z "${TS_OAUTH_CLIENT_SECRET:-}" ]; then
+        echo ""
+        return
+    fi
+    curl -s -X POST "${API_BASE}/oauth/token" \
+        -u "${TS_OAUTH_CLIENT_ID}:${TS_OAUTH_CLIENT_SECRET}" \
+        -d "grant_type=client_credentials" 2>/dev/null \
+        | jq -r '.access_token // empty' 2>/dev/null || echo ""
+}
+
+# Print the HTTP status code of GET on a service definition (200 exists, 404 gone).
+api_service_status() {
+    local token="$1" name="$2"
+    curl -s -o /dev/null -w "%{http_code}" \
+        -H "Authorization: Bearer ${token}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null || echo "000"
+}
+
+# Create/update a service definition via PUT. Echoes HTTP status code.
+api_create_service() {
+    local token="$1" name="$2"
+    curl -s -o /dev/null -w "%{http_code}" -X PUT \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\":\"${name}\",\"tags\":[\"tag:ci-test-container\"],\"ports\":[\"tcp:${OTHERHOST_SERVICE_PORT}\"]}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null || echo "000"
+}
+
+# Count hosts currently advertising a service (0 = unused).
+api_service_host_count() {
+    local token="$1" name="$2"
+    curl -s -H "Authorization: Bearer ${token}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/${name}/devices" 2>/dev/null \
+        | jq -r '.hosts | length' 2>/dev/null || echo "0"
+}
+
+# Delete a service definition (best effort).
+api_delete_service() {
+    local token="$1" name="$2"
+    curl -s -o /dev/null -X DELETE \
+        -H "Authorization: Bearer ${token}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null || true
+}
+
+# Best-effort removal of any leftover e2e-* service definitions so repeated CI
+# runs against the shared tailnet don't accumulate orphaned services.
+sweep_e2e_services() {
+    local token leftovers name
+    token=$(mint_api_token)
+    [ -z "$token" ] && return 0
+    leftovers=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services" 2>/dev/null \
+        | jq -r '.vipServices[]?.name // empty' 2>/dev/null | grep '^svc:e2e-' || true)
+    for name in $leftovers; do
+        api_delete_service "$token" "$name"
+        echo "  Swept leftover service $name"
+    done
+}
+
+# Advertise / stop advertising OTHERHOST service on the node via the CLI.
+advertise_otherhost_service() {
+    docker exec "$TS_CONTAINER" tailscale serve \
+        --service="$OTHERHOST_SERVICE_NAME" \
+        --http="$OTHERHOST_SERVICE_PORT" \
+        http://127.0.0.1:19080 >/dev/null 2>&1
+}
+clear_otherhost_service() {
+    docker exec "$TS_CONTAINER" tailscale serve clear "$OTHERHOST_SERVICE_NAME" >/dev/null 2>&1 || true
+}
+
+# Establish OTHERHOST as a stable, host-backed service in the control plane.
+# Retries create+advertise because DockTail's cleanup may delete the definition
+# during the brief window before the advertising host propagates. Once a host is
+# registered the serve config keeps it registered, so DockTail stops deleting it.
+setup_otherhost_service() {
+    local token="$1" attempt inner hc
+    for attempt in $(seq 1 6); do
+        api_create_service "$token" "$OTHERHOST_SERVICE_NAME" >/dev/null
+        advertise_otherhost_service
+        for inner in $(seq 1 5); do
+            sleep 2
+            hc=$(api_service_host_count "$token" "$OTHERHOST_SERVICE_NAME")
+            if [ "${hc:-0}" -ge 1 ] 2>/dev/null; then
+                return 0
+            fi
+            if [ "$(api_service_status "$token" "$OTHERHOST_SERVICE_NAME")" = "404" ]; then
+                break  # deleted mid-registration; recreate and retry
+            fi
+        done
+    done
     return 1
 }
 
@@ -581,10 +685,91 @@ else
 fi
 
 # ==============================================================================
-# 13. Log Health
+# 13. Control Plane Cleanup of Unused Services (DELETE_UNUSED_SERVICES=true)
+# ==============================================================================
+#
+# DockTail runs with DELETE_UNUSED_SERVICES=true in this stack. During each
+# reconcile it lists tailnet Service definitions and deletes the ones that no
+# host advertises anymore, while keeping:
+#   - services DockTail currently advertises (backed by a running container), and
+#   - services advertised by some other host (the multi-instance safety guard).
+#
+# We create two fixtures directly via the API to exercise both branches:
+#   - svc:e2e-orphan     : never advertised (zero hosts)  -> must be deleted
+#   - svc:e2e-otherhost  : advertised by the node (>=1 host) -> must be kept
+
+log "13. Control Plane Cleanup of Unused Services"
+
+API_TOKEN=$(mint_api_token)
+
+if [ -z "$API_TOKEN" ]; then
+    echo "  SKIP: no OAuth credentials available for Control Plane API assertions"
+else
+    # Capture whether DockTail created a definition for a running service, so the
+    # "preserved" assertion is decoupled from Control Plane creation timing.
+    proto_http_before=$(api_service_status "$API_TOKEN" "svc:e2e-proto-http")
+
+    echo "  --- Creating an unused (zero-host) service via API ---"
+    create_status=$(api_create_service "$API_TOKEN" "$ORPHAN_SERVICE_NAME")
+    if [ "$create_status" = "200" ]; then
+        pass "created $ORPHAN_SERVICE_NAME via API"
+    else
+        fail "failed to create $ORPHAN_SERVICE_NAME via API (status $create_status)"
+    fi
+
+    echo "  --- Creating a service advertised by the node (has a host) ---"
+    if setup_otherhost_service "$API_TOKEN"; then
+        pass "$OTHERHOST_SERVICE_NAME has at least one advertising host"
+    else
+        fail "$OTHERHOST_SERVICE_NAME never registered an advertising host"
+    fi
+
+    echo "  --- DockTail should delete the unused service ---"
+    orphan_deleted=0
+    for _ in $(seq 1 20); do
+        if [ "$(api_service_status "$API_TOKEN" "$ORPHAN_SERVICE_NAME")" = "404" ]; then
+            orphan_deleted=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$orphan_deleted" = "1" ]; then
+        pass "$ORPHAN_SERVICE_NAME deleted by DockTail (no advertising hosts)"
+    else
+        fail "$ORPHAN_SERVICE_NAME still exists; DockTail did not delete the unused service"
+    fi
+
+    echo "  --- DockTail must keep the service advertised by another host ---"
+    if [ "$(api_service_status "$API_TOKEN" "$OTHERHOST_SERVICE_NAME")" = "200" ]; then
+        pass "$OTHERHOST_SERVICE_NAME preserved (still advertised by a host)"
+    else
+        fail "$OTHERHOST_SERVICE_NAME was deleted despite having an advertising host"
+    fi
+
+    echo "  --- DockTail must keep the running container's service ---"
+    if [ "$proto_http_before" = "200" ]; then
+        if [ "$(api_service_status "$API_TOKEN" "svc:e2e-proto-http")" = "200" ]; then
+            pass "svc:e2e-proto-http preserved (DockTail is advertising it)"
+        else
+            fail "svc:e2e-proto-http was deleted despite being advertised by DockTail"
+        fi
+    else
+        echo "  SKIP: svc:e2e-proto-http has no Control Plane definition to check"
+    fi
+
+    wait_for_docktail_log "Deleting unused service definition"
+
+    echo "  --- Cleaning up cleanup-test fixtures ---"
+    clear_otherhost_service
+    api_delete_service "$API_TOKEN" "$OTHERHOST_SERVICE_NAME"
+    api_delete_service "$API_TOKEN" "$ORPHAN_SERVICE_NAME"
+fi
+
+# ==============================================================================
+# 14. Log Health
 # ==============================================================================
 
-log "13. DockTail Log Health"
+log "14. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if grep -qE "FATAL|panic" <<<"$docktail_logs"; then

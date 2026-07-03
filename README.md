@@ -35,6 +35,7 @@ DockTail uses native Tailscale Services, not per-container Tailscale devices.
 - Tailscale Funnel for public internet access.
 - Multiple Tailscale services from one container.
 - Automatic reconciliation when containers restart or IPs change.
+- Optional cleanup of unused Tailscale service definitions (opt-in, safe with multiple instances).
 - Stateless Docker container runtime.
 
 ## Quick Start

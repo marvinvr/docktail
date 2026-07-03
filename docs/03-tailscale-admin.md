@@ -12,6 +12,8 @@ OAuth is recommended. It enables automatic service creation and avoids expiring 
    - General -> Services: Write
    - Devices -> Core: Write
    - Keys -> Auth Keys: Write, only when using the sidecar method
+
+   These same permissions also cover the optional `DELETE_UNUSED_SERVICES` cleanup, which lists Services, inspects their advertising hosts, and deletes the ones no host advertises. No extra scope is required.
 4. Add the credentials to DockTail:
 
 ```yaml

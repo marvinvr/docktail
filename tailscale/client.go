@@ -19,14 +19,15 @@ import (
 
 // Client handles Tailscale CLI interactions and API calls
 type Client struct {
-	socketPath      string
-	tailnet         string
-	baseURL         string
-	httpClient      *http.Client
-	apiSyncEnabled  bool
-	serverVersion   string // set when CLI/daemon version mismatch detected
-	managedFunnels  map[string]struct{}
-	ignoredServices map[string]struct{}
+	socketPath           string
+	tailnet              string
+	baseURL              string
+	httpClient           *http.Client
+	apiSyncEnabled       bool
+	serverVersion        string // set when CLI/daemon version mismatch detected
+	managedFunnels       map[string]struct{}
+	ignoredServices      map[string]struct{}
+	deleteUnusedServices bool
 }
 
 // ClientConfig holds configuration for creating a Tailscale client
@@ -37,17 +38,21 @@ type ClientConfig struct {
 	OAuthClientID      string
 	OAuthClientSecret  string
 	IgnoreServiceNames []string
+	// DeleteUnusedServices enables removal of tailnet Service definitions that
+	// are no longer advertised by any host during reconciliation.
+	DeleteUnusedServices bool
 }
 
 // NewClient creates a new Tailscale client
 // Prefers OAuth credentials over API key if both are provided
 func NewClient(cfg ClientConfig) *Client {
 	client := &Client{
-		socketPath:      cfg.SocketPath,
-		tailnet:         cfg.Tailnet,
-		baseURL:         "https://api.tailscale.com",
-		managedFunnels:  make(map[string]struct{}),
-		ignoredServices: make(map[string]struct{}),
+		socketPath:           cfg.SocketPath,
+		tailnet:              cfg.Tailnet,
+		baseURL:              "https://api.tailscale.com",
+		managedFunnels:       make(map[string]struct{}),
+		ignoredServices:      make(map[string]struct{}),
+		deleteUnusedServices: cfg.DeleteUnusedServices,
 	}
 
 	for _, serviceName := range cfg.IgnoreServiceNames {
@@ -306,6 +311,15 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 			// Log error but do NOT return it - we don't want API failures to break local serving
 			log.Error().Err(err).Msg("Failed to sync service definitions to Tailscale API")
 		}
+
+		// Optionally delete tailnet Service definitions no host advertises anymore.
+		// Runs after syncing so freshly created services are already in the desired
+		// set and therefore excluded. Failures are non-blocking.
+		if c.deleteUnusedServices {
+			if err := c.deleteUnusedServiceDefinitions(ctx, desiredServices); err != nil {
+				log.Error().Err(err).Msg("Failed to delete unused service definitions")
+			}
+		}
 	}
 
 	return nil
@@ -455,6 +469,7 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 }
 
 type apiService struct {
+	Name  string   `json:"name"`
 	Addrs []string `json:"addrs"`
 	Tags  []string `json:"tags"`
 	Ports []string `json:"ports"`
@@ -496,6 +511,201 @@ func (c *Client) getService(ctx context.Context, serviceName string) (*apiServic
 	}
 
 	return &svc, nil
+}
+
+// listServices returns every Service definition configured in the tailnet.
+func (c *Client) listServices(ctx context.Context) ([]apiService, error) {
+	apiURL := fmt.Sprintf("%s/api/v2/tailnet/%s/services", c.baseURL, url.PathEscape(c.tailnet))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GET request: %w", err)
+	}
+
+	log.Debug().
+		Str("method", "GET").
+		Str("url", apiURL).
+		Msg("Listing service definitions")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list services API returned error status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		VIPServices []apiService `json:"vipServices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.VIPServices, nil
+}
+
+// serviceHost describes a device that is advertising a Service, as returned by
+// the "list devices hosting a Service" API.
+type serviceHost struct {
+	StableNodeID  string `json:"stableNodeID"`
+	ApprovalLevel string `json:"approvalLevel"`
+	Configured    string `json:"configured"`
+}
+
+// listServiceHosts returns the devices currently advertising the given Service.
+// An empty slice means no host is advertising it, i.e. the Service is unused.
+func (c *Client) listServiceHosts(ctx context.Context, serviceName string) ([]serviceHost, error) {
+	apiURL := fmt.Sprintf("%s/api/v2/tailnet/%s/services/%s/devices", c.baseURL, url.PathEscape(c.tailnet), url.PathEscape(serviceName))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GET request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("GET request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("list service hosts API returned error status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var result struct {
+		Hosts []serviceHost `json:"hosts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("failed to decode response: %w", err)
+	}
+
+	return result.Hosts, nil
+}
+
+// deleteService removes a Service definition from the tailnet Control Plane.
+// A 404 is treated as success since the goal (the Service no longer exists) is met.
+func (c *Client) deleteService(ctx context.Context, serviceName string) error {
+	apiURL := fmt.Sprintf("%s/api/v2/tailnet/%s/services/%s", c.baseURL, url.PathEscape(c.tailnet), url.PathEscape(serviceName))
+
+	req, err := http.NewRequestWithContext(ctx, "DELETE", apiURL, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create DELETE request: %w", err)
+	}
+
+	log.Debug().
+		Str("method", "DELETE").
+		Str("url", apiURL).
+		Msg("Deleting service definition")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("DELETE request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("delete service API returned error status %d: %s", resp.StatusCode, string(body))
+	}
+
+	return nil
+}
+
+// deleteUnusedServiceDefinitions removes tailnet Service definitions that DockTail
+// no longer advertises and that no other host is advertising either.
+//
+// It is deliberately conservative so it is safe to run from multiple DockTail
+// instances against the same tailnet:
+//   - Services DockTail currently wants (the desired set) are never touched. This
+//     also protects a Service created earlier in this same reconcile cycle before
+//     its advertising host has propagated to the Control Plane.
+//   - Services listed in IGNORE_SERVICE_NAMES are never touched.
+//   - A Service is deleted only when the Control Plane reports zero hosts advertising
+//     it. A Service advertised by any other node/instance reports at least one host
+//     and is left alone.
+//   - Any API error while listing services or hosts aborts deletion for that Service;
+//     DockTail never deletes under uncertainty.
+func (c *Client) deleteUnusedServiceDefinitions(ctx context.Context, desiredServices []*apptypes.ContainerService) error {
+	desired := make(map[string]struct{})
+	for _, svc := range desiredServices {
+		if !svc.ServiceEnabled {
+			continue
+		}
+		desired[normalizeServiceName(svc.ServiceName)] = struct{}{}
+	}
+
+	services, err := c.listServices(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to list services: %w", err)
+	}
+
+	log.Info().
+		Int("service_count", len(services)).
+		Msg("Checking tailnet for unused service definitions")
+
+	deleted := 0
+	var lastErr error
+
+	for _, svc := range services {
+		name := svc.Name
+		if !isManagedService(name) {
+			continue
+		}
+		if _, ok := desired[normalizeServiceName(name)]; ok {
+			// DockTail advertises this service; keep it.
+			continue
+		}
+		if c.shouldIgnoreService(name) {
+			log.Debug().
+				Str("service", name).
+				Msg("Skipping unused-service cleanup for ignored service")
+			continue
+		}
+
+		hosts, err := c.listServiceHosts(ctx, name)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("service", name).
+				Msg("Failed to check service hosts, skipping deletion")
+			lastErr = err
+			continue
+		}
+		if len(hosts) > 0 {
+			log.Debug().
+				Str("service", name).
+				Int("host_count", len(hosts)).
+				Msg("Service still advertised by at least one host, keeping")
+			continue
+		}
+
+		log.Info().
+			Str("service", name).
+			Msg("Deleting unused service definition (no advertising hosts)")
+
+		if err := c.deleteService(ctx, name); err != nil {
+			log.Error().
+				Err(err).
+				Str("service", name).
+				Msg("Failed to delete unused service definition")
+			lastErr = err
+			continue
+		}
+		deleted++
+	}
+
+	if deleted > 0 {
+		log.Info().
+			Int("deleted", deleted).
+			Msg("Deleted unused service definitions")
+	}
+
+	return lastErr
 }
 
 // CleanupAllServices removes all services and funnels managed by DockTail

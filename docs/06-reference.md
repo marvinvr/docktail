@@ -11,7 +11,8 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `TAILSCALE_API_KEY` | - | API key alternative to OAuth. |
 | `TAILSCALE_TAILNET` | `-` | Tailnet ID. Defaults to the credential's tailnet. |
 | `DEFAULT_SERVICE_TAGS` | `tag:container` | Default tags assigned to services. |
-| `IGNORE_SERVICE_NAMES` | - | Comma-separated service names DockTail must not drain or clear during reconciliation or shutdown cleanup. |
+| `IGNORE_SERVICE_NAMES` | - | Comma-separated service names DockTail must not drain, clear, or delete during reconciliation or shutdown cleanup. |
+| `DELETE_UNUSED_SERVICES` | `false` | When `true`, DockTail deletes tailnet Service definitions that no host advertises anymore. Requires API credentials. See [Cleanup Behavior](#cleanup-behavior). |
 | `LOG_LEVEL` | `info` | Logging level: `debug`, `info`, `warn`, or `error`. |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. |
@@ -65,7 +66,26 @@ Funnel `docktail.funnel.protocol` values:
 
 ### Cleanup Behavior
 
-DockTail cleans up the services it advertises locally when it shuts down. It does not delete Tailscale service definitions from the Admin Console API when containers stop; this is a conservative deletion strategy to avoid removing definitions unexpectedly.
+DockTail cleans up the services it advertises locally when it shuts down.
+
+By default it does **not** delete Tailscale Service definitions from the Control Plane when containers stop; this is a conservative strategy that avoids removing definitions unexpectedly.
+
+#### Deleting unused Service definitions
+
+Set `DELETE_UNUSED_SERVICES=true` to let DockTail remove Service definitions that are no longer advertised by any host. This requires API credentials (OAuth or API key). It is disabled by default.
+
+During each reconciliation, for every Service definition in the tailnet DockTail:
+
+1. Keeps the Service if DockTail currently advertises it (it is backed by a running container).
+2. Keeps the Service if its name is listed in `IGNORE_SERVICE_NAMES`.
+3. Asks the Control Plane which hosts advertise the Service. If **at least one** host advertises it, DockTail keeps it.
+4. Deletes the Service only when **no** host advertises it.
+
+Because the decision is based on the tailnet-wide advertiser count, this is safe to enable on multiple DockTail instances at once: a Service advertised by any other host or instance always reports at least one host and is never deleted. DockTail also skips deletion whenever an API call fails, so it never deletes under uncertainty.
+
+This cleanup runs only during reconciliation, not during shutdown, so restarting DockTail does not delete and recreate the Services of still-running containers.
+
+> **Note:** When enabled, DockTail may also delete Service definitions it did not create if they have no advertising hosts (for example, a Service you defined in the admin console but never advertised). Add such names to `IGNORE_SERVICE_NAMES` to protect them.
 
 ### Useful Links
 
