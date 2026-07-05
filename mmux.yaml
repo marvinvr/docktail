@@ -1,0 +1,25 @@
+# mmux workspace config.
+# Run `mmux` in this directory to open (or reattach to) the session.
+# New here? Run `mmux docs` for the full guide, or visit https://mmux.org.
+# `name` is optional — it defaults to this directory's name.
+# name: my-workspace
+
+# Agents: interactive programs you spawn on demand from the sidebar.
+# agents:
+#   - name: Claude
+#     cmd: claude
+#     args: ["--dangerously-skip-permissions"]
+
+# Processes: commands you start/stop and watch. cwd is relative to this file.
+# processes:
+#   - name: Dev server
+#     cmd: npm
+#     args: ["run", "dev"]
+#     autostart: false
+
+# Linked projects: other projects to show alongside this one in the same
+# workspace — any directories you want grouped together (extra clones, a
+# related repo, a service), each its own sidebar group. One level deep,
+# de-duplicated by path.
+linked-projects:
+  - ../docktail2
