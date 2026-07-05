@@ -37,6 +37,7 @@ func main() {
 	defaultTagsStr := getEnv("DEFAULT_SERVICE_TAGS", "tag:container")
 	ignoreServiceNamesStr := getEnv("IGNORE_SERVICE_NAMES", "")
 	deleteUnusedServices := getEnvBool("DELETE_UNUSED_SERVICES", false)
+	skipShutdownCleanup := getEnvBool("SKIP_SHUTDOWN_CLEANUP", false)
 
 	// Parse default tags
 	var defaultTags []string
@@ -80,6 +81,7 @@ func main() {
 		Strs("default_tags", defaultTags).
 		Strs("ignore_service_names", ignoreServiceNames).
 		Bool("delete_unused_services", deleteUnusedServices).
+		Bool("skip_shutdown_cleanup", skipShutdownCleanup).
 		Msg("Configuration loaded")
 
 	// Create Docker client
@@ -129,7 +131,16 @@ func main() {
 		log.Fatal().Err(err).Msg("Reconciler failed")
 	}
 
-	// Graceful shutdown: clean up all Tailscale services
+	// Graceful shutdown: optionally clean up all Tailscale services and funnels.
+	// When SKIP_SHUTDOWN_CLEANUP is enabled we leave everything advertised so the
+	// services stay reachable while DockTail is down. The serve/funnel config lives
+	// in tailscaled, not in DockTail, so skipping cleanup keeps it in place.
+	if skipShutdownCleanup {
+		log.Info().Msg("SKIP_SHUTDOWN_CLEANUP is enabled, leaving Tailscale services and funnels advertised")
+		log.Info().Msg("DockTail stopped gracefully")
+		return
+	}
+
 	log.Info().Msg("Reconciler stopped, cleaning up Tailscale services")
 
 	// Use a new context with timeout for cleanup (don't use cancelled context)

@@ -13,6 +13,7 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `DEFAULT_SERVICE_TAGS` | `tag:container` | Default tags assigned to services. |
 | `IGNORE_SERVICE_NAMES` | - | Comma-separated service names DockTail must not drain, clear, or delete during reconciliation or shutdown cleanup. |
 | `DELETE_UNUSED_SERVICES` | `false` | When `true`, DockTail deletes tailnet Service definitions that no host advertises anymore. Requires API credentials. See [Cleanup Behavior](#cleanup-behavior). |
+| `SKIP_SHUTDOWN_CLEANUP` | `false` | When `true`, DockTail leaves its services and Funnels advertised on shutdown instead of draining and clearing them, so they stay reachable while DockTail is down. See [Cleanup Behavior](#cleanup-behavior). |
 | `LOG_LEVEL` | `info` | Logging level: `debug`, `info`, `warn`, or `error`. |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. |
@@ -66,7 +67,9 @@ Funnel `docktail.funnel.protocol` values:
 
 ### Cleanup Behavior
 
-DockTail cleans up the services it advertises locally when it shuts down.
+DockTail cleans up the services and Funnels it advertises locally when it shuts down (draining then clearing them).
+
+Set `SKIP_SHUTDOWN_CLEANUP=true` to skip this. DockTail then leaves its services and Funnels advertised when it exits, so they stay reachable while DockTail is down. This affects only graceful shutdown; a hard crash never runs cleanup either way. On restart, DockTail re-adopts the still-advertised services and removes only those whose containers are no longer running. Ignored services (`IGNORE_SERVICE_NAMES`) are unaffected because they are never cleaned up regardless of this setting.
 
 By default it does **not** delete Tailscale Service definitions from the Control Plane when containers stop; this is a conservative strategy that avoids removing definitions unexpectedly.
 
