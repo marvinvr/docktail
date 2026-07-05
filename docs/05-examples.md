@@ -16,6 +16,21 @@ services:
 
 Access it at `http://web.your-tailnet.ts.net`.
 
+### Service With A Description
+
+Add a description to label the service in the Tailscale admin panel. Requires API credentials (OAuth or API key), which DockTail syncs to the Service definition's `comment`.
+
+```yaml
+services:
+  linkding:
+    image: sissbruecker/linkding:latest
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=linkding"
+      - "docktail.service.port=9090"
+      - "docktail.service.description=Bookmark Manager"
+```
+
 ### HTTPS With Auto TLS
 
 ```yaml

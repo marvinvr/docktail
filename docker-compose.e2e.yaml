@@ -320,6 +320,26 @@ services:
       - "docktail.service.service-port=80"
       - "docktail.service.service-protocol=http"
 
+  # ============================================================================
+  # 10. Service Description (synced to Control Plane "comment", issue #60)
+  # ============================================================================
+
+  # Primary service with a description plus an indexed service with its own
+  # description; both are synced to the Service definition's "comment" field.
+  test-description:
+    image: nginx:alpine
+    container_name: e2e-description
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-description"
+      - "docktail.service.port=80"
+      - "docktail.service.description=E2E Bookmark Manager"
+      - "docktail.service.1.name=e2e-description-secondary"
+      - "docktail.service.1.port=80"
+      - "docktail.service.1.service-port=8080"
+      - "docktail.service.1.description=E2E Secondary Service"
+
 networks:
   backend:
 

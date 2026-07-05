@@ -25,6 +25,7 @@ Set `docktail.service.direct=false` to use published host ports instead. This is
 | `docktail.service.enable` | Yes | - | Enable a private Tailscale service for the container. |
 | `docktail.service.name` | Yes | - | Service name, such as `web` or `api`. |
 | `docktail.service.port` | Yes | - | Backend container port to proxy to. |
+| `docktail.service.description` | No | - | Human-readable description shown for the service in the Tailscale admin panel. Requires API credentials (synced to the Service definition's `comment`). |
 | `docktail.service.direct` | No | `true` | Proxy directly to container IP instead of requiring a published host port. |
 | `docktail.service.network` | No | `bridge` or first available | Docker network used for direct container IP detection. |
 | `docktail.service.protocol` | No | Smart | Backend protocol. |
@@ -54,7 +55,7 @@ services:
       - "docktail.service.1.port=8001"
 ```
 
-Each indexed service requires its own `name` and `port`. Per-index overridable labels are `name`, `port`, `service-port`, `protocol`, and `service-protocol`. Tags and network settings are inherited from the primary service config.
+Each indexed service requires its own `name` and `port`. Per-index overridable labels are `name`, `port`, `service-port`, `protocol`, `service-protocol`, and `description`. Tags and network settings are inherited from the primary service config.
 
 ### Funnel Labels
 

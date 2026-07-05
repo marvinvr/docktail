@@ -487,16 +487,17 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		cctx.destIP = destIP
 
 		primary := &apptypes.ContainerService{
-			ContainerID:     cctx.containerID[:12],
-			ContainerName:   cctx.containerName,
-			ServiceEnabled:  true,
-			ServiceName:     serviceName,
-			Port:            port,
-			TargetPort:      destPort,
-			ServiceProtocol: serviceProtocol,
-			Protocol:        protocol,
-			Tags:            tags,
-			IPAddress:       destIP,
+			ContainerID:        cctx.containerID[:12],
+			ContainerName:      cctx.containerName,
+			ServiceEnabled:     true,
+			ServiceName:        serviceName,
+			ServiceDescription: labels[apptypes.LabelDescription],
+			Port:               port,
+			TargetPort:         destPort,
+			ServiceProtocol:    serviceProtocol,
+			Protocol:           protocol,
+			Tags:               tags,
+			IPAddress:          destIP,
 		}
 		result = append(result, primary)
 
@@ -654,17 +655,18 @@ func (c *Client) parseIndexedPorts(
 		}
 
 		svc := &apptypes.ContainerService{
-			ContainerID:     cctx.containerID[:12],
-			ContainerName:   cctx.containerName,
-			ServiceEnabled:  true,
-			ServiceName:     idxServiceName,
-			Port:            servicePort,
-			TargetPort:      idxDestPort,
-			ServiceProtocol: serviceProtocol,
-			Protocol:        protocol,
-			Tags:            cctx.tags,
-			IPAddress:       idxDestIP,
-			FunnelEnabled:   false,
+			ContainerID:        cctx.containerID[:12],
+			ContainerName:      cctx.containerName,
+			ServiceEnabled:     true,
+			ServiceName:        idxServiceName,
+			ServiceDescription: labels[prefix+"description"],
+			Port:               servicePort,
+			TargetPort:         idxDestPort,
+			ServiceProtocol:    serviceProtocol,
+			Protocol:           protocol,
+			Tags:               cctx.tags,
+			IPAddress:          idxDestIP,
+			FunnelEnabled:      false,
 		}
 
 		services = append(services, svc)

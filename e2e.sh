@@ -308,6 +308,14 @@ api_create_service() {
         "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null || echo "000"
 }
 
+# Print the "comment" (description) of a service definition, empty if unset/gone.
+api_service_comment() {
+    local token="$1" name="$2"
+    curl -s -H "Authorization: Bearer ${token}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null \
+        | jq -r '.comment // empty' 2>/dev/null || echo ""
+}
+
 # Count hosts currently advertising a service (0 = unused).
 api_service_host_count() {
     local token="$1" name="$2"
@@ -766,10 +774,62 @@ else
 fi
 
 # ==============================================================================
-# 14. Log Health
+# 14. Service Description (synced to Control Plane "comment", issue #60)
+# ==============================================================================
+#
+# https://github.com/marvinvr/docktail/issues/60
+# docktail.service.description sets the human-readable description shown per
+# service in the Tailscale admin panel. DockTail syncs it to the Service
+# definition's "comment" field via the Control Plane API, so it is only
+# verifiable when API credentials are configured. Indexed services carry their
+# own description independently of the primary service.
+
+log "14. Service Description (issue #60)"
+
+echo "  --- Pre-check: described services exist locally ---"
+refresh_serve_status
+assert_service_exists       "e2e-description"
+assert_service_exists       "e2e-description-secondary"
+
+if [ -z "${API_TOKEN:-}" ]; then
+    echo "  SKIP: no OAuth credentials available for Control Plane API assertions"
+else
+    echo "  --- Primary service description synced to Control Plane comment ---"
+    desc_synced=0
+    for _ in $(seq 1 20); do
+        if [ "$(api_service_comment "$API_TOKEN" "svc:e2e-description")" = "E2E Bookmark Manager" ]; then
+            desc_synced=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$desc_synced" = "1" ]; then
+        pass "svc:e2e-description comment set to 'E2E Bookmark Manager'"
+    else
+        fail "svc:e2e-description comment not synced (got '$(api_service_comment "$API_TOKEN" "svc:e2e-description")')"
+    fi
+
+    echo "  --- Indexed service description synced independently ---"
+    idx_desc_synced=0
+    for _ in $(seq 1 20); do
+        if [ "$(api_service_comment "$API_TOKEN" "svc:e2e-description-secondary")" = "E2E Secondary Service" ]; then
+            idx_desc_synced=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$idx_desc_synced" = "1" ]; then
+        pass "svc:e2e-description-secondary comment set to 'E2E Secondary Service'"
+    else
+        fail "svc:e2e-description-secondary comment not synced (got '$(api_service_comment "$API_TOKEN" "svc:e2e-description-secondary")')"
+    fi
+fi
+
+# ==============================================================================
+# 15. Log Health
 # ==============================================================================
 
-log "14. DockTail Log Health"
+log "15. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if grep -qE "FATAL|panic" <<<"$docktail_logs"; then

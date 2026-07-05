@@ -2,22 +2,23 @@ package types
 
 // ContainerService represents a parsed container with its Tailscale service configuration
 type ContainerService struct {
-	ContainerID      string
-	ContainerName    string
-	ServiceEnabled   bool
-	ServiceName      string
-	Port             string   // Tailscale service port (e.g., "443")
-	TargetPort       string   // Container/host port to proxy to (e.g., "9080")
-	ServiceProtocol  string   // Protocol Tailscale uses (e.g., "https", "http", "tcp")
-	Protocol         string   // Protocol the container speaks (e.g., "http", "https", "tcp")
-	Tags             []string // Tailscale service tags (e.g., ["tag:container", "tag:web"])
-	IPAddress        string
-	FunnelEnabled    bool   // Enable Tailscale Funnel (public internet access)
-	FunnelPort       string // Container port for funnel (separate from service port)
-	FunnelTargetPort string // Host port that maps to FunnelPort
-	FunnelFunnelPort string // Public-facing port (443, 8443, or 10000 for HTTPS)
-	FunnelProtocol   string // Funnel protocol (https, tcp, tls-terminated-tcp)
-	FunnelPath       string // HTTP(S) Funnel path (for example "/" or "/webhook")
+	ContainerID        string
+	ContainerName      string
+	ServiceEnabled     bool
+	ServiceName        string
+	ServiceDescription string   // Human-readable Service description synced to the Tailscale Control Plane (admin panel "comment")
+	Port               string   // Tailscale service port (e.g., "443")
+	TargetPort         string   // Container/host port to proxy to (e.g., "9080")
+	ServiceProtocol    string   // Protocol Tailscale uses (e.g., "https", "http", "tcp")
+	Protocol           string   // Protocol the container speaks (e.g., "http", "https", "tcp")
+	Tags               []string // Tailscale service tags (e.g., ["tag:container", "tag:web"])
+	IPAddress          string
+	FunnelEnabled      bool   // Enable Tailscale Funnel (public internet access)
+	FunnelPort         string // Container port for funnel (separate from service port)
+	FunnelTargetPort   string // Host port that maps to FunnelPort
+	FunnelFunnelPort   string // Public-facing port (443, 8443, or 10000 for HTTPS)
+	FunnelProtocol     string // Funnel protocol (https, tcp, tls-terminated-tcp)
+	FunnelPath         string // HTTP(S) Funnel path (for example "/" or "/webhook")
 }
 
 // TailscaleServiceConfig represents the JSON structure for Tailscale service configuration
@@ -35,6 +36,7 @@ type ServiceDefinition struct {
 const (
 	LabelEnable           = "docktail.service.enable"
 	LabelService          = "docktail.service.name"
+	LabelDescription      = "docktail.service.description"
 	LabelPort             = "docktail.service.service-port"
 	LabelServiceProtocol  = "docktail.service.service-protocol"
 	LabelTarget           = "docktail.service.port"
