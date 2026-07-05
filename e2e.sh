@@ -320,8 +320,10 @@ api_service_host_count() {
 # tags (order-independent). The tags a service carries are NOT visible in
 # `tailscale serve status`; they only live in the service definition on the
 # control plane, so this is the only way to actually verify tag parsing.
-# Retries because DockTail creates the definition asynchronously during
-# reconciliation. Usage: assert_service_tags <token> <service-name> <tag>...
+# Polls until the tags converge on the expected set (the definition is created
+# asynchronously during reconciliation), so the check reflects the reconciled
+# result rather than the first partial/empty response. Usage:
+# assert_service_tags <token> <service-name> <tag>...
 assert_service_tags() {
     local token="$1" name="svc:$2"
     shift 2
@@ -333,7 +335,7 @@ assert_service_tags() {
         actual=$(curl -s -H "Authorization: Bearer ${token}" \
             "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null \
             | jq -r '(.tags // []) | sort | join(",")' 2>/dev/null || true)
-        if [ -n "$actual" ]; then
+        if [ "$actual" = "$expected" ]; then
             break
         fi
         sleep 2
