@@ -782,7 +782,8 @@ fi
 # service in the Tailscale admin panel. DockTail syncs it to the Service
 # definition's "comment" field via the Control Plane API, so it is only
 # verifiable when API credentials are configured. Indexed services carry their
-# own description independently of the primary service.
+# own description independently of the primary service. Covers both the initial
+# sync and a later description change being reflected in the comment.
 
 log "14. Service Description (issue #60)"
 
@@ -822,6 +823,32 @@ else
         pass "svc:e2e-description-secondary comment set to 'E2E Secondary Service'"
     else
         fail "svc:e2e-description-secondary comment not synced (got '$(api_service_comment "$API_TOKEN" "svc:e2e-description-secondary")')"
+    fi
+
+    echo "  --- Changing the description is reflected in the Control Plane comment ---"
+    docker stop e2e-description >/dev/null 2>&1 || true
+    docker rm e2e-description >/dev/null 2>&1 || true
+    docker run -d \
+        --name e2e-description \
+        --restart no \
+        --label "docktail.service.enable=true" \
+        --label "docktail.service.name=e2e-description" \
+        --label "docktail.service.port=80" \
+        --label "docktail.service.description=E2E Updated Description" \
+        nginx:alpine >/dev/null 2>&1
+
+    desc_updated=0
+    for _ in $(seq 1 20); do
+        if [ "$(api_service_comment "$API_TOKEN" "svc:e2e-description")" = "E2E Updated Description" ]; then
+            desc_updated=1
+            break
+        fi
+        sleep 2
+    done
+    if [ "$desc_updated" = "1" ]; then
+        pass "svc:e2e-description comment changed to 'E2E Updated Description'"
+    else
+        fail "svc:e2e-description comment not updated (got '$(api_service_comment "$API_TOKEN" "svc:e2e-description")')"
     fi
 fi
 
