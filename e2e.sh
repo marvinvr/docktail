@@ -316,6 +316,36 @@ api_service_host_count() {
         | jq -r '.hosts | length' 2>/dev/null || echo "0"
 }
 
+# Assert that a Control Plane service definition carries exactly the expected
+# tags (order-independent). The tags a service carries are NOT visible in
+# `tailscale serve status`; they only live in the service definition on the
+# control plane, so this is the only way to actually verify tag parsing.
+# Retries because DockTail creates the definition asynchronously during
+# reconciliation. Usage: assert_service_tags <token> <service-name> <tag>...
+assert_service_tags() {
+    local token="$1" name="svc:$2"
+    shift 2
+    local expected actual=""
+    expected=$(jq -rn --args '$ARGS.positional | sort | join(",")' "$@")
+
+    local attempt
+    for attempt in $(seq 1 20); do
+        actual=$(curl -s -H "Authorization: Bearer ${token}" \
+            "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null \
+            | jq -r '(.tags // []) | sort | join(",")' 2>/dev/null || true)
+        if [ -n "$actual" ]; then
+            break
+        fi
+        sleep 2
+    done
+
+    if [ "$actual" = "$expected" ]; then
+        pass "$name has tags [$expected]"
+    else
+        fail "$name expected tags [$expected], got [${actual:-<none>}]"
+    fi
+}
+
 # Delete a service definition (best effort).
 api_delete_service() {
     local token="$1" name="$2"
@@ -505,9 +535,22 @@ assert_funnel_active        "8443"
 # ==============================================================================
 
 log "5. Custom Tags"
-# Tags aren't in serve status, but we verify the service was created
-# (tag validation would need API access)
 assert_service_exists       "e2e-custom-tags"
+
+# The container sets `docktail.tags=tag:web,tag:production` (comma-separated).
+# Verify BOTH tags actually landed on the service definition in the control
+# plane. This guards the comma-splitting tag parser: a regression that dropped
+# the second tag, mis-split the value, or ignored the label would be caught
+# here (an exact, order-independent match), whereas the existence check above
+# would still pass. The tags are only visible via the Control Plane API, not
+# `tailscale serve status`, so this needs an OAuth token — without one we fail
+# loudly rather than silently skip the verification.
+CUSTOM_TAGS_TOKEN=$(mint_api_token)
+if [ -z "$CUSTOM_TAGS_TOKEN" ]; then
+    fail "no OAuth credentials available to verify custom tags via Control Plane API"
+else
+    assert_service_tags "$CUSTOM_TAGS_TOKEN" "e2e-custom-tags" "tag:web" "tag:production"
+fi
 
 # ==============================================================================
 # 6. Multiple Ports
