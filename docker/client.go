@@ -409,6 +409,40 @@ func (c *Client) parseFunnelConfig(cctx *containerCtx, labels map[string]string)
 
 // parseContainer extracts service configuration from container labels.
 // Returns one ContainerService for the primary port plus one for each indexed port.
+// parseTags parses a comma-separated docktail.tags label value into a
+// deduplicated tag list, falling back to a copy of defaultTags when the label
+// is empty. Duplicates must be dropped: the Control Plane stores tags as a
+// set, so a desired list with duplicates would register as permanent drift
+// and trigger a re-PUT on every reconcile cycle.
+func parseTags(tagsStr string, containerName string, defaultTags []string) []string {
+	if tagsStr == "" {
+		tags := make([]string, len(defaultTags))
+		copy(tags, defaultTags)
+		return tags
+	}
+
+	var tags []string
+	seen := make(map[string]struct{})
+	for _, part := range strings.Split(tagsStr, ",") {
+		trimmed := strings.TrimSpace(part)
+		if trimmed == "" {
+			continue
+		}
+		if _, dup := seen[trimmed]; dup {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		if !strings.HasPrefix(trimmed, "tag:") {
+			log.Warn().
+				Str("container", containerName).
+				Str("tag", trimmed).
+				Msg("Tag should start with 'tag:' prefix per Tailscale convention")
+		}
+		tags = append(tags, trimmed)
+	}
+	return tags
+}
+
 func (c *Client) parseContainer(ctx context.Context, containerID string, labels map[string]string) ([]*apptypes.ContainerService, error) {
 	serviceEnabled := isServiceEnabled(labels)
 	funnelEnabled := isFunnelEnabled(labels)
@@ -434,26 +468,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		isDirectMode:     labels[apptypes.LabelDirect] != "false",
 	}
 
-	// Parse tags
-	var tags []string
-	if tagsStr := labels[apptypes.LabelTags]; tagsStr != "" {
-		parts := strings.Split(tagsStr, ",")
-		for _, part := range parts {
-			if trimmed := strings.TrimSpace(part); trimmed != "" {
-				if !strings.HasPrefix(trimmed, "tag:") {
-					log.Warn().
-						Str("container", cctx.containerName).
-						Str("tag", trimmed).
-						Msg("Tag should start with 'tag:' prefix per Tailscale convention")
-				}
-				tags = append(tags, trimmed)
-			}
-		}
-	} else {
-		tags = make([]string, len(c.defaultTags))
-		copy(tags, c.defaultTags)
-	}
-	cctx.tags = tags
+	cctx.tags = parseTags(labels[apptypes.LabelTags], cctx.containerName, c.defaultTags)
 
 	var result []*apptypes.ContainerService
 	if serviceEnabled {
@@ -496,7 +511,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 			TargetPort:         destPort,
 			ServiceProtocol:    serviceProtocol,
 			Protocol:           protocol,
-			Tags:               tags,
+			Tags:               cctx.tags,
 			IPAddress:          destIP,
 		}
 		result = append(result, primary)
@@ -531,7 +546,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		ContainerID:      cctx.containerID[:12],
 		ContainerName:    cctx.containerName,
 		ServiceEnabled:   false,
-		Tags:             tags,
+		Tags:             cctx.tags,
 		IPAddress:        funnelCfg.IPAddress,
 		FunnelEnabled:    true,
 		FunnelPort:       funnelCfg.Port,

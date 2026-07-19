@@ -39,12 +39,21 @@ func main() {
 	deleteUnusedServices := getEnvBool("DELETE_UNUSED_SERVICES", false)
 	skipShutdownCleanup := getEnvBool("SKIP_SHUTDOWN_CLEANUP", false)
 
-	// Parse default tags
+	// Parse default tags, dropping duplicates: the Control Plane stores tags
+	// as a set, so a duplicated default would register as permanent drift and
+	// trigger a re-PUT on every reconcile cycle.
 	var defaultTags []string
+	seenDefaultTags := make(map[string]struct{})
 	for _, tag := range strings.Split(defaultTagsStr, ",") {
-		if trimmed := strings.TrimSpace(tag); trimmed != "" {
-			defaultTags = append(defaultTags, trimmed)
+		trimmed := strings.TrimSpace(tag)
+		if trimmed == "" {
+			continue
 		}
+		if _, dup := seenDefaultTags[trimmed]; dup {
+			continue
+		}
+		seenDefaultTags[trimmed] = struct{}{}
+		defaultTags = append(defaultTags, trimmed)
 	}
 
 	// Parse ignored service names

@@ -1,11 +1,60 @@
 package docker
 
 import (
+	"slices"
 	"strconv"
 	"testing"
 
 	apptypes "github.com/marvinvr/docktail/types"
 )
+
+func TestParseTags(t *testing.T) {
+	defaultTags := []string{"tag:container"}
+
+	tests := []struct {
+		name    string
+		tagsStr string
+		want    []string
+	}{
+		{
+			name:    "splits and trims comma-separated tags",
+			tagsStr: " tag:web , tag:production ",
+			want:    []string{"tag:web", "tag:production"},
+		},
+		{
+			name:    "drops duplicates keeping first occurrence order",
+			tagsStr: "tag:web,tag:production,tag:web",
+			want:    []string{"tag:web", "tag:production"},
+		},
+		{
+			name:    "skips empty entries",
+			tagsStr: "tag:web,,tag:production,",
+			want:    []string{"tag:web", "tag:production"},
+		},
+		{
+			name:    "empty label falls back to default tags",
+			tagsStr: "",
+			want:    []string{"tag:container"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseTags(tt.tagsStr, "test-container", defaultTags)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("parseTags(%q) = %v, want %v", tt.tagsStr, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("fallback returns a copy of the defaults", func(t *testing.T) {
+		got := parseTags("", "test-container", defaultTags)
+		got[0] = "tag:mutated"
+		if defaultTags[0] != "tag:container" {
+			t.Errorf("mutating the result changed defaultTags to %v", defaultTags)
+		}
+	})
+}
 
 func TestResolveProtocols(t *testing.T) {
 	tests := []struct {

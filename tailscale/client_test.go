@@ -96,6 +96,33 @@ func TestAggregateServiceDefinitions(t *testing.T) {
 	}
 }
 
+func TestSameStringSet(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []string
+		b    []string
+		want bool
+	}{
+		{name: "equal ignoring order", a: []string{"tag:a", "tag:b"}, b: []string{"tag:b", "tag:a"}, want: true},
+		{name: "duplicates do not count as difference", a: []string{"tag:a", "tag:a", "tag:b"}, b: []string{"tag:b", "tag:a"}, want: true},
+		{name: "missing element", a: []string{"tag:a"}, b: []string{"tag:a", "tag:b"}, want: false},
+		{name: "duplicates cannot mask a missing element", a: []string{"tag:a", "tag:b"}, b: []string{"tag:b", "tag:b"}, want: false},
+		{name: "extra element", a: []string{"tag:a", "tag:b"}, b: []string{"tag:a"}, want: false},
+		{name: "both empty", a: nil, b: []string{}, want: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sameStringSet(tt.a, tt.b); got != tt.want {
+				t.Errorf("sameStringSet(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+			if got := sameStringSet(tt.b, tt.a); got != tt.want {
+				t.Errorf("sameStringSet(%v, %v) = %v, want %v", tt.b, tt.a, got, tt.want)
+			}
+		})
+	}
+}
+
 // servicePutPayload mirrors the JSON body SyncServiceDefinition PUTs to the
 // Control Plane API.
 type servicePutPayload struct {
@@ -152,6 +179,15 @@ func TestSyncServiceDefinitionReconciliation(t *testing.T) {
 				Tags: []string{"tag:manual"},
 			},
 			tags:    nil,
+			wantPut: false,
+		},
+		{
+			name: "duplicate desired tags are not drift against the deduped stored set",
+			existing: &apiService{
+				Name: "svc:web",
+				Tags: []string{"tag:web"},
+			},
+			tags:    []string{"tag:web", "tag:web"},
 			wantPut: false,
 		},
 		{

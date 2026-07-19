@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -499,13 +498,27 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 	return nil
 }
 
-// sameStringSet reports whether a and b contain the same elements, ignoring
-// order.
+// sameStringSet reports whether a and b contain the same unique elements,
+// ignoring order and duplicates. Duplicates must not count as difference: the
+// Control Plane stores tags as a set, so treating a duplicated desired list
+// as drift would trigger a re-PUT on every reconcile cycle.
 func sameStringSet(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
+	setA := make(map[string]struct{}, len(a))
+	for _, s := range a {
+		setA[s] = struct{}{}
 	}
-	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
+	distinctB := 0
+	seenB := make(map[string]struct{}, len(b))
+	for _, s := range b {
+		if _, ok := setA[s]; !ok {
+			return false
+		}
+		if _, dup := seenB[s]; !dup {
+			seenB[s] = struct{}{}
+			distinctB++
+		}
+	}
+	return len(setA) == distinctB
 }
 
 // putService PUTs a service definition payload to the Control Plane API.
