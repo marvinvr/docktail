@@ -1,6 +1,11 @@
 package tailscale
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
 
 	apptypes "github.com/marvinvr/docktail/types"
@@ -86,6 +91,189 @@ func TestAggregateServiceDefinitions(t *testing.T) {
 						}
 					}
 				}
+			}
+		})
+	}
+}
+
+// servicePutPayload mirrors the JSON body SyncServiceDefinition PUTs to the
+// Control Plane API.
+type servicePutPayload struct {
+	Name    string   `json:"name"`
+	Addrs   []string `json:"addrs"`
+	Tags    []string `json:"tags"`
+	Ports   []string `json:"ports"`
+	Comment string   `json:"comment"`
+}
+
+func TestSyncServiceDefinitionReconciliation(t *testing.T) {
+	tests := []struct {
+		name        string
+		existing    *apiService // nil = service does not exist (GET returns 404)
+		tags        []string
+		ports       []string
+		description string
+		wantPut     bool
+		want        servicePutPayload
+	}{
+		{
+			name: "tag drift is reconciled, ports addrs and manual comment preserved",
+			existing: &apiService{
+				Name:    "svc:web",
+				Addrs:   []string{"100.100.1.1"},
+				Tags:    []string{"tag:container"},
+				Ports:   []string{"tcp:443"},
+				Comment: "manual note",
+			},
+			tags:    []string{"tag:web", "tag:production"},
+			ports:   []string{"443", "8080"},
+			wantPut: true,
+			want: servicePutPayload{
+				Name:    "svc:web",
+				Addrs:   []string{"100.100.1.1"},
+				Tags:    []string{"tag:web", "tag:production"},
+				Ports:   []string{"tcp:443"},
+				Comment: "manual note",
+			},
+		},
+		{
+			name: "identical tags in different order are not drift",
+			existing: &apiService{
+				Name: "svc:web",
+				Tags: []string{"tag:b", "tag:a"},
+			},
+			tags:    []string{"tag:a", "tag:b"},
+			wantPut: false,
+		},
+		{
+			name: "empty desired tags leave existing tags alone",
+			existing: &apiService{
+				Name: "svc:web",
+				Tags: []string{"tag:manual"},
+			},
+			tags:    nil,
+			wantPut: false,
+		},
+		{
+			name: "tag and description drift update together",
+			existing: &apiService{
+				Name:    "svc:web",
+				Tags:    []string{"tag:container"},
+				Ports:   []string{"tcp:80"},
+				Comment: "old",
+			},
+			tags:        []string{"tag:web"},
+			description: "new",
+			wantPut:     true,
+			want: servicePutPayload{
+				Name:    "svc:web",
+				Tags:    []string{"tag:web"},
+				Ports:   []string{"tcp:80"},
+				Comment: "new",
+			},
+		},
+		{
+			name: "description drift alone keeps existing tags",
+			existing: &apiService{
+				Name:  "svc:web",
+				Tags:  []string{"tag:manual", "tag:extra"},
+				Ports: []string{"tcp:80"},
+			},
+			tags:        []string{"tag:manual", "tag:extra"},
+			description: "described",
+			wantPut:     true,
+			want: servicePutPayload{
+				Name:    "svc:web",
+				Tags:    []string{"tag:manual", "tag:extra"},
+				Ports:   []string{"tcp:80"},
+				Comment: "described",
+			},
+		},
+		{
+			name: "fully converged service is not rewritten",
+			existing: &apiService{
+				Name:    "svc:web",
+				Tags:    []string{"tag:web"},
+				Comment: "same",
+			},
+			tags:        []string{"tag:web"},
+			description: "same",
+			wantPut:     false,
+		},
+		{
+			name:        "missing service is created with tcp-prefixed ports",
+			existing:    nil,
+			tags:        []string{"tag:web"},
+			ports:       []string{"443", "8080"},
+			description: "hello",
+			wantPut:     true,
+			want: servicePutPayload{
+				Name:    "svc:web",
+				Tags:    []string{"tag:web"},
+				Ports:   []string{"tcp:443", "tcp:8080"},
+				Comment: "hello",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotPut *servicePutPayload
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodGet:
+					if tt.existing == nil {
+						w.WriteHeader(http.StatusNotFound)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(tt.existing)
+				case http.MethodPut:
+					var payload servicePutPayload
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Errorf("failed to decode PUT payload: %v", err)
+					}
+					gotPut = &payload
+					w.WriteHeader(http.StatusOK)
+				default:
+					t.Errorf("unexpected %s request", r.Method)
+					w.WriteHeader(http.StatusMethodNotAllowed)
+				}
+			}))
+			defer srv.Close()
+
+			c := &Client{
+				baseURL:    srv.URL,
+				tailnet:    "example.com",
+				httpClient: srv.Client(),
+			}
+
+			if err := c.SyncServiceDefinition(context.Background(), "web", tt.tags, tt.ports, tt.description); err != nil {
+				t.Fatalf("SyncServiceDefinition returned error: %v", err)
+			}
+
+			if !tt.wantPut {
+				if gotPut != nil {
+					t.Fatalf("unexpected PUT with payload %+v", *gotPut)
+				}
+				return
+			}
+			if gotPut == nil {
+				t.Fatal("expected a PUT to the Control Plane, got none")
+			}
+			if gotPut.Name != tt.want.Name {
+				t.Errorf("name = %q, want %q", gotPut.Name, tt.want.Name)
+			}
+			if !slices.Equal(gotPut.Addrs, tt.want.Addrs) {
+				t.Errorf("addrs = %v, want %v", gotPut.Addrs, tt.want.Addrs)
+			}
+			if !slices.Equal(gotPut.Tags, tt.want.Tags) {
+				t.Errorf("tags = %v, want %v", gotPut.Tags, tt.want.Tags)
+			}
+			if !slices.Equal(gotPut.Ports, tt.want.Ports) {
+				t.Errorf("ports = %v, want %v", gotPut.Ports, tt.want.Ports)
+			}
+			if gotPut.Comment != tt.want.Comment {
+				t.Errorf("comment = %q, want %q", gotPut.Comment, tt.want.Comment)
 			}
 		})
 	}

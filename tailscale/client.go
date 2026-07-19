@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -396,11 +397,16 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 	return nil
 }
 
-// SyncServiceDefinition ensures a service definition exists in the Tailscale API.
-// It creates the service (with an optional description) if it doesn't exist. For
-// an already-existing service it does NOT touch tags or ports, but it does
-// reconcile the description (the admin-panel "comment") when a description label
-// is set and differs from the current value.
+// SyncServiceDefinition ensures a service definition exists in the Tailscale API
+// and matches the label-declared state. It creates the service (with an optional
+// description) if it doesn't exist. For an already-existing service it
+// reconciles tags and the description (the admin-panel "comment"): labels are
+// the source of truth, so manual edits to either are overwritten on the next
+// run (issue #63). An empty desired tag set or description means "nothing
+// declared" and leaves the existing value alone. Ports and addrs are never
+// touched on existing services: the definition is tailnet-global and other
+// hosts may back the same service, so no single instance knows the full
+// desired port set.
 func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, tags []string, ports []string, description string) error {
 	if !strings.HasPrefix(serviceName, "svc:") {
 		serviceName = "svc:" + serviceName
@@ -412,29 +418,44 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 		return fmt.Errorf("failed to get service details: %w", err)
 	}
 
-	// If service already exists, only reconcile the description. Tags and ports
-	// are intentionally left untouched to avoid clobbering manual changes.
 	if existing != nil {
-		if description == "" || existing.Comment == description {
+		tagsDrifted := len(tags) > 0 && !sameStringSet(existing.Tags, tags)
+		descriptionDrifted := description != "" && existing.Comment != description
+
+		if !tagsDrifted && !descriptionDrifted {
 			log.Debug().
 				Str("service", serviceName).
 				Strs("existing_tags", existing.Tags).
 				Strs("existing_ports", existing.Ports).
-				Msg("Service already exists in Control Plane, skipping creation")
+				Msg("Service definition already up to date in Control Plane")
 			return nil
 		}
 
-		log.Info().
-			Str("service", serviceName).
-			Str("description", description).
-			Msg("Updating service description in Control Plane")
+		desiredTags := existing.Tags
+		if tagsDrifted {
+			desiredTags = tags
+			log.Info().
+				Str("service", serviceName).
+				Strs("old_tags", existing.Tags).
+				Strs("new_tags", tags).
+				Msg("Updating service tags in Control Plane")
+		}
+
+		comment := existing.Comment
+		if descriptionDrifted {
+			comment = description
+			log.Info().
+				Str("service", serviceName).
+				Str("description", description).
+				Msg("Updating service description in Control Plane")
+		}
 
 		payload := map[string]interface{}{
 			"name":    serviceName,
 			"addrs":   existing.Addrs,
-			"tags":    existing.Tags,
+			"tags":    desiredTags,
 			"ports":   existing.Ports,
-			"comment": description,
+			"comment": comment,
 		}
 		return c.putService(ctx, serviceName, payload)
 	}
@@ -476,6 +497,15 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 		Msg("Successfully created service definition in Control Plane")
 
 	return nil
+}
+
+// sameStringSet reports whether a and b contain the same elements, ignoring
+// order.
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	return slices.Equal(slices.Sorted(slices.Values(a)), slices.Sorted(slices.Values(b)))
 }
 
 // putService PUTs a service definition payload to the Control Plane API.

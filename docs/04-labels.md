@@ -31,7 +31,9 @@ Set `docktail.service.direct=false` to use published host ports instead. This is
 | `docktail.service.protocol` | No | Smart | Backend protocol. |
 | `docktail.service.service-port` | No | Smart | Port Tailscale listens on. |
 | `docktail.service.service-protocol` | No | Smart | Tailscale-facing protocol. |
-| `docktail.tags` | No | `tag:container` | Comma-separated service tags. |
+| `docktail.tags` | No | `tag:container` | Comma-separated service tags. Labels are the source of truth; see the note below. |
+
+Tags are synced to the tailnet Service definition through the Tailscale API and require API credentials. Labels are authoritative: DockTail reconciles tags on every cycle, so tags edited by hand in the Tailscale admin console are reverted to the label-declared set on the next reconcile. Containers without a `docktail.tags` label use `DEFAULT_SERVICE_TAGS`.
 
 Smart defaults:
 

@@ -10,7 +10,7 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `TAILSCALE_OAUTH_CLIENT_SECRET` | - | OAuth client secret. Enables automatic service creation when paired with the client ID. |
 | `TAILSCALE_API_KEY` | - | API key alternative to OAuth. |
 | `TAILSCALE_TAILNET` | `-` | Tailnet ID. Defaults to the credential's tailnet. |
-| `DEFAULT_SERVICE_TAGS` | `tag:container` | Default tags assigned to services. |
+| `DEFAULT_SERVICE_TAGS` | `tag:container` | Default tags for services whose containers set no `docktail.tags` label. Tags are reconciled on every cycle; manual tag edits in the admin console are overwritten. |
 | `IGNORE_SERVICE_NAMES` | - | Comma-separated service names DockTail must not drain, clear, or delete during reconciliation or shutdown cleanup. |
 | `DELETE_UNUSED_SERVICES` | `false` | When `true`, DockTail deletes tailnet Service definitions that no host advertises anymore. Requires API credentials. See [Cleanup Behavior](#cleanup-behavior). |
 | `SKIP_SHUTDOWN_CLEANUP` | `false` | When `true`, DockTail leaves its services and Funnels advertised on shutdown instead of draining and clearing them. This can keep ports exposed on the tailnet beyond what your current labels define; see [Cleanup Behavior](#cleanup-behavior). |

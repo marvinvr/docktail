@@ -356,6 +356,29 @@ assert_service_tags() {
     fi
 }
 
+# Simulate a manual admin-console edit on an existing service definition:
+# fetch the current definition, overwrite its tags and comment, and PUT it
+# back with name/addrs/ports preserved. Echoes the PUT HTTP status code.
+# Usage: api_tamper_service_tags <token> <svc:name> <comment> <tag>...
+api_tamper_service_tags() {
+    local token="$1" name="$2" comment="$3"
+    shift 3
+    local current payload
+    current=$(curl -s -H "Authorization: Bearer ${token}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null)
+    payload=$(echo "$current" | jq -c --arg comment "$comment" --args \
+        '.tags = $ARGS.positional | .comment = $comment' "$@" 2>/dev/null)
+    if [ -z "$payload" ]; then
+        echo "000"
+        return
+    fi
+    curl -s -o /dev/null -w "%{http_code}" -X PUT \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "$payload" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null || echo "000"
+}
+
 # Delete a service definition (best effort).
 api_delete_service() {
     local token="$1" name="$2"
@@ -898,10 +921,53 @@ else
 fi
 
 # ==============================================================================
-# 15. Log Health
+# 15. Authoritative Tag Reconciliation (issue #63)
+# ==============================================================================
+#
+# https://github.com/marvinvr/docktail/issues/63
+# Labels are the source of truth for service tags: manual edits to a service
+# definition's tags in the admin console must be overwritten on the next
+# reconcile. Previously tags were only applied at creation time, so a tag label
+# added after the service already existed never took effect.
+#
+# Simulate a manual console edit by rewriting svc:e2e-custom-tags with a stale
+# tag set plus a manual comment, then assert DockTail converges the tags back
+# to the label-declared set. The container declares no description label, so
+# the manual comment must survive the tag update (an empty declared value
+# means DockTail leaves the existing one alone).
+
+log "15. Authoritative Tag Reconciliation (issue #63)"
+
+TAG_SYNC_TOKEN=$(mint_api_token)
+if [ -z "$TAG_SYNC_TOKEN" ]; then
+    fail "no OAuth credentials available to verify tag reconciliation via Control Plane API"
+else
+    echo "  --- Simulating a manual tag edit in the admin console ---"
+    tamper_status=$(api_tamper_service_tags "$TAG_SYNC_TOKEN" "svc:e2e-custom-tags" "e2e manual comment" "tag:ci-test-container")
+    if [ "$tamper_status" = "200" ]; then
+        pass "rewrote svc:e2e-custom-tags with stale tags via API"
+    else
+        fail "failed to rewrite svc:e2e-custom-tags via API (status $tamper_status)"
+    fi
+
+    echo "  --- DockTail must revert the tags to the label-declared set ---"
+    assert_service_tags "$TAG_SYNC_TOKEN" "e2e-custom-tags" "tag:web" "tag:production"
+    wait_for_docktail_log "Updating service tags in Control Plane"
+
+    echo "  --- Manual comment survives (no description label declared) ---"
+    tampered_comment=$(api_service_comment "$TAG_SYNC_TOKEN" "svc:e2e-custom-tags")
+    if [ "$tampered_comment" = "e2e manual comment" ]; then
+        pass "manual comment preserved on svc:e2e-custom-tags"
+    else
+        fail "manual comment lost on svc:e2e-custom-tags (got '${tampered_comment:-<none>}')"
+    fi
+fi
+
+# ==============================================================================
+# 16. Log Health
 # ==============================================================================
 
-log "15. DockTail Log Health"
+log "16. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if grep -qE "FATAL|panic" <<<"$docktail_logs"; then

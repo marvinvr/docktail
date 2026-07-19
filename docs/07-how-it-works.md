@@ -28,7 +28,7 @@ Tailnet clients access container services
 3. It resolves the backend destination from Docker network settings or published ports.
 4. It generates Tailscale service configuration pointing to that backend.
 5. It executes the Tailscale CLI to advertise services and Funnels.
-6. If OAuth or API key credentials are configured, it creates service definitions through the Tailscale API.
+6. If OAuth or API key credentials are configured, it creates service definitions through the Tailscale API and keeps their tags and descriptions in sync with the labels; manual edits to either are overwritten.
 7. If `DELETE_UNUSED_SERVICES` is enabled, it deletes tailnet service definitions that no host advertises anymore.
 8. It periodically reconciles state so container IP changes are handled automatically.
 
