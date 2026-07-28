@@ -6,12 +6,12 @@ DockTail can advertise services locally without Tailscale API credentials, but O
 
 OAuth is recommended. It enables automatic service creation and avoids expiring API keys.
 
-1. Open Tailscale Admin Console -> Settings -> OAuth clients.
+1. Open Tailscale Admin Console -> Settings -> Trust credentials.
 2. Create an OAuth client scoped to your server tag, for example `tag:server`.
 3. Grant these permissions:
-   - General -> Services: Write
+   - General -> Services: Write (and specify required tag)
    - Devices -> Core: Write
-   - Keys -> Auth Keys: Write, only when using the sidecar method
+   - Keys -> Auth Keys: Write (only when using the sidecar method)
 
    These same permissions also cover the optional `DELETE_UNUSED_SERVICES` cleanup, which lists Services, inspects their advertising hosts, and deletes the ones no host advertises. No extra scope is required.
 4. Add the credentials to DockTail:
