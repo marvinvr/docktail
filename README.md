@@ -138,7 +138,7 @@ environment:
 
 Without the key the module is completely inert: no connection is opened and DockTail behaves exactly as before. The link is outbound-only and metadata-only — the protocol has no exec, deploy, or shell message types, which you can verify in [`cloud/`](cloud/).
 
-[See plans](https://docktail.org/cloud/#pricing) · [open the dashboard](https://cloud.docktail.org/login) · [agent setup](docs/06-cloud.md)
+[Explore DockTail Cloud](https://docktail.org/cloud/) · [open the dashboard](https://cloud.docktail.org/login) · [agent setup](docs/06-cloud.md)
 
 ## Documentation
 
