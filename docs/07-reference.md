@@ -57,7 +57,7 @@ Tailscale-facing `docktail.service.service-protocol` values:
 | `http` | Layer 7 HTTP. |
 | `https` | Layer 7 HTTPS with automatic TLS. |
 | `tcp` | Layer 4 TCP. |
-| `tls-terminated-tcp` | Layer 4 TCP with TLS termination. |
+| `tls-terminated-tcp` | Layer 4 TCP; Tailscale terminates incoming TLS and forwards decrypted TCP to the backend. |
 
 Container-facing `docktail.service.protocol` values:
 

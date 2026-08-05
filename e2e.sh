@@ -115,15 +115,18 @@ wait_for_service_state() {
     local expected_proto="$3"
     local timeout="${4:-30}"
     local elapsed=0
-    local actual_port is_https is_http actual_proto
+    local actual_port terminate_tls is_https is_http actual_proto
 
     while [ "$elapsed" -lt "$timeout" ]; do
         refresh_serve_status
         actual_port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
         if [ "$actual_port" = "$expected_port" ]; then
+            terminate_tls=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$actual_port\"].TerminateTLS // empty" 2>/dev/null || true)
             is_https=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$actual_port\"].HTTPS // false" 2>/dev/null || true)
             is_http=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$actual_port\"].HTTP // false" 2>/dev/null || true)
-            if [ "$is_https" = "true" ]; then
+            if [ -n "$terminate_tls" ]; then
+                actual_proto="tls-terminated-tcp"
+            elif [ "$is_https" = "true" ]; then
                 actual_proto="https"
             elif [ "$is_http" = "true" ]; then
                 actual_proto="http"
@@ -205,7 +208,8 @@ assert_service_port_count() {
 }
 
 # Check service protocol via TCP config flags
-# "http" = HTTP:true, "https" = HTTPS:true, "tcp" = neither
+# "tls-terminated-tcp" = TerminateTLS set, "http" = HTTP:true,
+# "https" = HTTPS:true, "tcp" = none of those fields set.
 assert_service_protocol() {
     local name="svc:$1"
     local expected_proto="$2"
@@ -216,11 +220,14 @@ assert_service_protocol() {
         return
     fi
 
-    local is_https is_http actual
+    local terminate_tls is_https is_http actual
+    terminate_tls=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].TerminateTLS // empty" 2>/dev/null || true)
     is_https=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].HTTPS // false" 2>/dev/null || true)
     is_http=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].HTTP // false" 2>/dev/null || true)
 
-    if [ "$is_https" = "true" ]; then
+    if [ -n "$terminate_tls" ]; then
+        actual="tls-terminated-tcp"
+    elif [ "$is_https" = "true" ]; then
         actual="https"
     elif [ "$is_http" = "true" ]; then
         actual="http"
@@ -493,6 +500,11 @@ assert_service_exists       "e2e-proto-tcp"
 assert_service_port         "e2e-proto-tcp" "5432"
 assert_service_protocol     "e2e-proto-tcp" "tcp"
 
+echo "  --- TLS-terminated TCP ---"
+assert_service_exists       "e2e-proto-tls-terminated-tcp"
+assert_service_port         "e2e-proto-tls-terminated-tcp" "6697"
+assert_service_protocol     "e2e-proto-tls-terminated-tcp" "tls-terminated-tcp"
+
 # ==============================================================================
 # 2. Smart Defaults
 # ==============================================================================
@@ -702,6 +714,7 @@ refresh_serve_status
 assert_service_exists       "e2e-proto-http"
 assert_service_exists       "e2e-proto-https"
 assert_service_exists       "e2e-proto-tcp"
+assert_service_exists       "e2e-proto-tls-terminated-tcp"
 assert_service_exists       "e2e-default-minimal"
 assert_service_exists       "e2e-net-custom"
 assert_service_exists       "e2e-multiport"
@@ -715,11 +728,10 @@ assert_service_not_exists   "e2e-manual-protected"  # cleaned up explicitly
 # ==============================================================================
 #
 # Regression test for https://github.com/marvinvr/docktail/issues/56:
-# TCP services were detected as "changed" on every reconciliation cycle because
-# the current destination could not be parsed from the Tailscale serve status
-# (the TCP forward target lives on the TCP handler, not in the Web section).
-# This caused DockTail to re-add the TCP service on every reconciliation cycle,
-# even though the live configuration already matched the desired state.
+# TCP services were detected as "changed" on every reconciliation cycle when
+# DockTail could not parse their full Tailscale serve status. Plain TCP stores
+# its destination on the TCP handler (issue #56), while TLS-terminated TCP also
+# uses the TerminateTLS field to distinguish it from plain TCP (issue #71).
 #
 # A correctly reconciling TCP service is flagged as "changed" zero times once it
 # has been established. We measure the number of "Service configuration changed"
@@ -728,29 +740,39 @@ assert_service_not_exists   "e2e-manual-protected"  # cleaned up explicitly
 
 log "12. TCP Reconciliation Stability (issue #56)"
 
-tcp_changed_key="key=svc:e2e-proto-tcp:5432"
-
-count_tcp_changed() {
+count_service_changed() {
+    local changed_key="$1"
     docker logs "$DOCKTAIL_CONTAINER" 2>&1 \
         | grep "Service configuration changed, will update" \
-        | grep -c -- "$tcp_changed_key" || true
+        | grep -c -- "$changed_key" || true
 }
 
 echo "  --- Pre-check: TCP service exists ---"
 refresh_serve_status
 assert_service_exists       "e2e-proto-tcp"
 assert_service_protocol     "e2e-proto-tcp" "tcp"
+assert_service_exists       "e2e-proto-tls-terminated-tcp"
+assert_service_protocol     "e2e-proto-tls-terminated-tcp" "tls-terminated-tcp"
 
 echo "  Measuring TCP reconciliation stability across multiple cycles..."
-before_changed=$(count_tcp_changed)
+before_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tcp:5432")
+before_tls_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tls-terminated-tcp:6697")
 sleep 16   # >= 3 reconcile cycles at RECONCILE_INTERVAL=5s
-after_changed=$(count_tcp_changed)
-changed_delta=$((after_changed - before_changed))
+after_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tcp:5432")
+after_tls_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tls-terminated-tcp:6697")
+tcp_changed_delta=$((after_tcp_changed - before_tcp_changed))
+tls_tcp_changed_delta=$((after_tls_tcp_changed - before_tls_tcp_changed))
 
-if [ "$changed_delta" -le 0 ]; then
-    pass "TCP service stable: not re-detected as changed across cycles (delta=$changed_delta)"
+if [ "$tcp_changed_delta" -le 0 ]; then
+    pass "TCP service stable: not re-detected as changed across cycles (delta=$tcp_changed_delta)"
 else
-    fail "TCP service re-detected as changed $changed_delta time(s) across reconcile cycles (issue #56: TCP services re-added every reconciliation)"
+    fail "TCP service re-detected as changed $tcp_changed_delta time(s) across reconcile cycles (issue #56: TCP services re-added every reconciliation)"
+fi
+
+if [ "$tls_tcp_changed_delta" -le 0 ]; then
+    pass "TLS-terminated TCP service stable: not re-detected as changed across cycles (delta=$tls_tcp_changed_delta)"
+else
+    fail "TLS-terminated TCP service re-detected as changed $tls_tcp_changed_delta time(s) across reconcile cycles (issue #71)"
 fi
 
 # ==============================================================================

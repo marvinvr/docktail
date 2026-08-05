@@ -95,6 +95,8 @@ func parseManagedServices(status TailscaleStatus) map[string]ServiceEndpoint {
 // serviceProtocol maps a TCP handler's flags to the DockTail protocol name.
 func serviceProtocol(tcpConfig TailscaleTCPConfig) string {
 	switch {
+	case tcpConfig.TerminateTLS != "":
+		return "tls-terminated-tcp"
 	case tcpConfig.HTTPS:
 		return "https"
 	case tcpConfig.HTTP:
@@ -144,8 +146,10 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 		protocolFlag = "--http"
 	case "https":
 		protocolFlag = "--https"
-	case "tcp", "tls-terminated-tcp":
+	case "tcp":
 		protocolFlag = "--tcp"
+	case "tls-terminated-tcp":
+		protocolFlag = "--tls-terminated-tcp"
 	default:
 		return fmt.Errorf("unsupported service protocol: %s", svc.ServiceProtocol)
 	}

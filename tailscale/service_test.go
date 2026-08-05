@@ -121,6 +121,32 @@ func TestTailscaleStatusParsing(t *testing.T) {
 			},
 		},
 		{
+			name: "TLS-terminated TCP service",
+			input: `{
+				"Services": {
+					"svc:irc": {
+						"TCP": {
+							"6697": {
+								"TCPForward": "172.17.0.6:6667",
+								"TerminateTLS": "irc.example.ts.net"
+							}
+						},
+						"Web": {}
+					}
+				}
+			}`,
+			expectedServices: 1,
+			checkFunc: func(t *testing.T, status TailscaleStatus) {
+				tcpCfg := status.Services["svc:irc"].TCP["6697"]
+				if tcpCfg.TerminateTLS != "irc.example.ts.net" {
+					t.Errorf("expected TerminateTLS to be parsed, got %q", tcpCfg.TerminateTLS)
+				}
+				if tcpCfg.TCPForward != "172.17.0.6:6667" {
+					t.Errorf("expected TCPForward 172.17.0.6:6667, got %q", tcpCfg.TCPForward)
+				}
+			},
+		},
+		{
 			name: "multiple services",
 			input: `{
 				"Services": {
@@ -186,6 +212,15 @@ func TestParseManagedServicesDestinations(t *testing.T) {
 				},
 				Web: map[string]TailscaleWebConfig{},
 			},
+			"svc:irc": {
+				TCP: map[string]TailscaleTCPConfig{
+					"6697": {
+						TCPForward:   "172.17.0.4:6667",
+						TerminateTLS: "irc.example.ts.net",
+					},
+				},
+				Web: map[string]TailscaleWebConfig{},
+			},
 			"manual-service": {
 				// Not managed by DockTail (no svc: prefix) -> ignored.
 				TCP: map[string]TailscaleTCPConfig{
@@ -222,6 +257,17 @@ func TestParseManagedServicesDestinations(t *testing.T) {
 	// The regression: TCP destination must be parsed from TCPForward, not left empty.
 	if db.Destination != "172.17.0.3:5432" {
 		t.Errorf("svc:db destination = %q, want 172.17.0.3:5432 (issue #56)", db.Destination)
+	}
+
+	irc, ok := got["svc:irc:6697"]
+	if !ok {
+		t.Fatal("expected svc:irc:6697 endpoint")
+	}
+	if irc.Protocol != "tls-terminated-tcp" {
+		t.Errorf("svc:irc protocol = %q, want tls-terminated-tcp", irc.Protocol)
+	}
+	if irc.Destination != "172.17.0.4:6667" {
+		t.Errorf("svc:irc destination = %q, want 172.17.0.4:6667", irc.Destination)
 	}
 }
 

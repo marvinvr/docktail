@@ -140,11 +140,12 @@ type TailscaleService struct {
 }
 
 type TailscaleTCPConfig struct {
-	HTTP  bool `json:"HTTP"`
-	HTTPS bool `json:"HTTPS"`
+	HTTP         bool   `json:"HTTP"`
+	HTTPS        bool   `json:"HTTPS"`
+	TerminateTLS string `json:"TerminateTLS"`
 	// TCPForward is the backend address ("host:port") for plain-TCP service
-	// endpoints. HTTP/HTTPS endpoints leave this empty and store their backend
-	// in the Web handler config instead.
+	// and TLS-terminated-TCP endpoints. HTTP/HTTPS endpoints leave this empty
+	// and store their backend in the Web handler config instead.
 	TCPForward string `json:"TCPForward"`
 }
 
