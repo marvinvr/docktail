@@ -351,7 +351,7 @@ type Config struct {
 	Logs    LogConfig     `json:"logs"`
 
 	// Unmonitored marks a host the cloud accepts but does not monitor (the
-	// workspace is past its plan host cap). A monitored host omits the field
+	// workspace is inactive or past its plan host cap). A monitored host omits the field
 	// (absent ⇒ monitored, so an old cloud or old agent behaves as before). An
 	// agent that sees Unmonitored should throttle to occasional catalog-teaser
 	// snapshots plus heartbeats and stop emitting checks/events/log excerpts;

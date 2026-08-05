@@ -2,7 +2,7 @@
 
 DockTail Cloud is optional, opt-in monitoring for DockTail-managed services across one or more hosts. It is a hosted dashboard that watches what DockTail exposes and tells you *why* something is unreachable.
 
-[Explore DockTail Cloud](https://docktail.org/cloud/) or [open the dashboard](https://cloud.docktail.org/login). One host is free with no time limit.
+[Explore DockTail Cloud](https://docktail.org/cloud/) or [open the dashboard](https://cloud.docktail.org/login). A new workspace can connect one preview host to verify setup; checks, incidents, and alerts start after a paid plan is activated.
 
 ### What You Get
 
@@ -15,10 +15,15 @@ Reporting rides along with the normal agent — there is no separate binary. The
 
 ### How To Enable
 
-1. Create a workspace in the DockTail Cloud dashboard and copy the workspace key (`dtc_...`).
+1. Create a workspace in the DockTail Cloud dashboard and copy its one-host preview key (`dtc_...`).
 2. Set `DOCKTAIL_CLOUD_KEY` on the DockTail agent.
 
 That is the only configuration — the cloud endpoint is built into the agent.
+
+Before plan activation the connection stays healthy but unmonitored: DockTail
+sends heartbeats and occasional catalog refreshes, while checks, Docker events,
+metrics, tailnet state, and log excerpts remain paused. Activating a plan pushes
+the full configuration to the live connection without reinstalling the agent.
 
 ```yaml
 services:

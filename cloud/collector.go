@@ -26,7 +26,7 @@ var agentVersion = "dev"
 const restartLoopThreshold = 3
 
 // unmonitoredSnapshotInterval throttles snapshots for a host the cloud reports
-// as unmonitored (past the workspace plan cap). Such a host stops sending
+// as unmonitored (inactive workspace or past the plan cap). Such a host stops sending
 // checks/events/logs entirely and emits only this occasional catalog-teaser
 // snapshot plus its heartbeat, until the cloud promotes it again.
 const unmonitoredSnapshotInterval = 5 * time.Minute
@@ -56,7 +56,7 @@ type Collector struct {
 	logOverrides map[string]string   // per-service capture mode override (service key -> proto.LogMode*)
 	checkFails   map[string]int      // consecutive local-check failures per service key, for incident log capture
 	cfgVer       int
-	unmonitored  bool      // cloud reports this host past the plan cap; throttle output
+	unmonitored  bool      // cloud reports this host inactive/past the plan cap; throttle output
 	lastTeaser   time.Time // last throttled teaser snapshot sent while unmonitored
 
 	statsMu      sync.Mutex           // guards prevCPU + prevCPUOther
