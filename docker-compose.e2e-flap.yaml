@@ -33,6 +33,34 @@ services:
       timeout: 5s
       retries: 30
 
+  # Second tailnet node, used purely as an observer. The Control Plane API has
+  # no liveness signal for a Service (GET /services/<n>/devices keeps listing a
+  # host long after it stops advertising, and the Service object carries no
+  # status), so the only trustworthy ground truth is whether another device on
+  # the tailnet can actually reach the Service VIP - which is precisely what the
+  # issue #72 reporters observe.
+  client:
+    image: tailscale/tailscale:latest
+    container_name: e2e-flap-client
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY_CLIENT}
+      - TS_HOSTNAME=e2e-flap-client
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false
+      - TS_EXTRA_ARGS=--advertise-tags=tag:ci-test
+    volumes:
+      - client-state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--json"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   docktail:
     build: .
     container_name: e2e-flap-docktail
@@ -84,3 +112,4 @@ services:
 volumes:
   ts-state:
   ts-socket:
+  client-state:
