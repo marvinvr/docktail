@@ -1,0 +1,81 @@
+# Minimal stack for the issue #72 repro harness (e2e-flap.sh).
+#
+# Deliberately small so a full run takes minutes, not the ~10 the main E2E
+# stack needs. It only carries what the flap experiments touch:
+#   - one Tailscale sidecar (the service host)
+#   - DockTail
+#   - two backing containers so a stuck service can be probed for revival by
+#     touching an unrelated service
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: e2e-flap-tailscale
+    hostname: e2e-flap
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_HOSTNAME=e2e-flap
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SOCKET=/var/run/tailscale/tailscaled.sock
+      - TS_USERSPACE=false
+      - TS_EXTRA_ARGS=--advertise-tags=tag:ci-test
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ts-socket:/var/run/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    network_mode: host
+    restart: "no"
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--json"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  docktail:
+    build: .
+    container_name: e2e-flap-docktail
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    restart: "no"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ts-socket:/var/run/tailscale
+      - ./.e2e-secrets:/run/secrets/docktail:ro
+    environment:
+      - LOG_LEVEL=debug
+      - RECONCILE_INTERVAL=5s
+      - DEFAULT_SERVICE_TAGS=tag:ci-test-container
+      # The manual-flap and revival-probe experiments drive these services by
+      # hand from the Tailscale CLI; DockTail must keep its hands off them.
+      - IGNORE_SERVICE_NAMES=e2e-flap-manual,e2e-flap-probe
+      # Cleanup would race the experiments (a momentarily host-less service is
+      # exactly the state under test).
+      - DELETE_UNUSED_SERVICES=false
+      - FILE__TAILSCALE_OAUTH_CLIENT_ID=/run/secrets/docktail/tailscale_oauth_client_id
+      - TAILSCALE_OAUTH_CLIENT_SECRET_FILE=/run/secrets/docktail/tailscale_oauth_client_secret
+      - TAILSCALE_TAILNET=${TS_TAILNET:-}
+
+  app-a:
+    image: nginx:alpine
+    container_name: e2e-flap-a
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-flap-a"
+      - "docktail.service.port=80"
+
+  app-b:
+    image: nginx:alpine
+    container_name: e2e-flap-b
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-flap-b"
+      - "docktail.service.port=80"
+
+volumes:
+  ts-state:
+  ts-socket:

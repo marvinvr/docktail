@@ -1,0 +1,32 @@
+# Investigation-only workflow for issue #72. Runs the flap repro harness on
+# every push to the investigation branch so the hypothesis can be tested against
+# a real tailnet. Not intended to be merged into main as-is.
+name: E2E Flap Repro (issue #72)
+
+on:
+  push:
+    branches:
+      - 'issue-72-*'
+  workflow_dispatch:
+
+jobs:
+  flap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Shares the tailnet with the main E2E suite; never run both at once.
+    concurrency:
+      group: docktail-e2e
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Pull test image
+        run: docker pull nginx:alpine
+
+      - name: Run flap repro harness
+        run: ./e2e-flap.sh
+        env:
+          TS_OAUTH_CLIENT_ID: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          TS_OAUTH_CLIENT_SECRET: ${{ secrets.TS_OAUTH_CLIENT_SECRET }}
+          TS_TAILNET: ${{ secrets.TS_TAILNET }}
