@@ -54,7 +54,8 @@ DRAIN_OBSERVE=90
 FLAP_ITERATIONS="${FLAP_ITERATIONS:-3}"
 BURST_SIZE="${BURST_SIZE:-5}"
 SLOW_GAP="${SLOW_GAP:-20}"
-SELFHEAL_WAIT="${SELFHEAL_WAIT:-90}"
+SELFHEAL_WAIT="${SELFHEAL_WAIT:-120}"
+SUSTAINED_WATCH="${SUSTAINED_WATCH:-150}"
 SIDECAR_BACKEND_PORT="${SIDECAR_BACKEND_PORT:-18081}"
 SCRIPT_TIMEOUT="${SCRIPT_TIMEOUT:-1700}"
 
@@ -192,11 +193,41 @@ probe_service() {
         *) return 1 ;;
     esac
     [ -z "$vip" ] && return 1
-    if [ "$kind" = "http" ]; then
-        client wget -q -T 5 -O /dev/null "http://${vip}:${port}/" >/dev/null 2>&1
-    else
-        client timeout 5 nc -z "$vip" "$port" >/dev/null 2>&1
-    fi
+    # Two attempts: a single wget/nc failure is noisy enough to have produced a
+    # false "offline" reading in an earlier run of this harness.
+    local attempt
+    for attempt in 1 2; do
+        if [ "$kind" = "http" ]; then
+            client wget -q -T 5 -O /dev/null "http://${vip}:${port}/" >/dev/null 2>&1 && return 0
+        else
+            client timeout 5 nc -z "$vip" "$port" >/dev/null 2>&1 && return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
+# Probe continuously and print a timeline, so a service that comes back and then
+# drops out again is visible. One reporter describes exactly that ("back online
+# for a few seconds then they are offline again"), which a single
+# did-it-recover check cannot see. Echoes the number of failed samples that
+# occurred AFTER the first success.
+watch_reachability() {
+    local svc="$1" duration="$2" label="$3"
+    local elapsed=0 timeline="" seen_up=0 drops=0 res
+    while [ "$elapsed" -lt "$duration" ]; do
+        if probe_service "$svc"; then
+            timeline="${timeline}."
+            seen_up=1
+        else
+            timeline="${timeline}X"
+            [ "$seen_up" -eq 1 ] && drops=$((drops + 1))
+        fi
+        sleep 3
+        elapsed=$((elapsed + 3))
+    done
+    echo "    ${label} [${svc}] timeline (one sample/3s, . = reachable, X = not): ${timeline}" >&2
+    echo "$drops"
 }
 
 # Poll until the observer can use the Service. Echoes elapsed seconds, or -1.
@@ -419,6 +450,16 @@ diag "EXP0 steady state"
 
 log "EXPM/EXP4  Drain $SVC_A: validate the metric, then check whether DockTail self-heals"
 
+docktail_log_mark() { docker logs "$DOCKTAIL_CONTAINER" 2>&1 | wc -l; }
+docktail_log_since() {
+    local mark="$1"
+    docker logs "$DOCKTAIL_CONTAINER" 2>&1 | tail -n "+$((mark + 1))"
+}
+
+install_sampler
+start_sampler "selfheal"
+mark=$(docktail_log_mark)
+
 step "Draining $SVC_A (serve config stays, advertisement is removed)"
 ts serve drain "$SVC_A" >/dev/null 2>&1
 sleep 2
@@ -426,39 +467,41 @@ sleep 2
 if local_is_advertised "$SVC_A"; then
     harness "drain did not remove $SVC_A from prefs.AdvertiseServices"
 else
-    note "local state: advertised=no, serve config $( local_serve_ok "$SVC_A" && echo present || echo absent )"
+    note "local state right after drain: advertised=no, serve config $( local_serve_ok "$SVC_A" && echo present || echo absent )"
 fi
 
-gone=$(wait_for_unreachable "$SVC_A" 60)
-if [ "$gone" = "-1" ]; then
-    metric_valid="no"
-    harness "METRIC INVALID: $SVC_A still reachable 60s after being drained; reachability cannot tell online from offline. Everything else this run is inconclusive."
-    diag "EXPM drained but still reachable"
-else
+step "Watching reachability for ${SELFHEAL_WAIT}s without touching anything"
+selfheal_drops=$(watch_reachability "$SVC_A" "$SELFHEAL_WAIT" "post-drain")
+stop_sampler
+
+still_advertised=$( local_is_advertised "$SVC_A" && echo yes || echo no )
+reachable_now=$( probe_service "$SVC_A" && echo yes || echo no )
+note "after ${SELFHEAL_WAIT}s: advertised=${still_advertised} reachable=${reachable_now}"
+note "DockTail reconcile cycles during the window: $(docktail_log_since "$mark" | grep -c 'Reconciliation completed successfully' || true)"
+
+echo "    Everything DockTail did during the drain window:"
+docktail_log_since "$mark" | grep -iE "e2e-flap-a" | grep -iE "adding|added|removing|drain|clear|changed|skipping|advertis" | sed 's/^/      /' || echo "      <nothing>"
+
+echo "    Local advertisement state transitions during the window:"
+dump_sampler_transitions "$SVC_A"
+
+if [ "$reachable_now" = "no" ]; then
     metric_valid="yes"
-    ok "METRIC VALID: drained service became unreachable after ${gone}s"
+    repro "EXPM/EXP4: $SVC_A stayed unreachable to the whole tailnet for ${SELFHEAL_WAIT}s after losing only its advertisement. Its serve config is present and correct, so DockTail - which reads current state from 'tailscale serve status', a view with no advertisement state in it - reported clean reconciles throughout and never repaired it."
+    diag "EXPM/EXP4 not self-healed"
 
-    step "Leaving DockTail to reconcile for ${SELFHEAL_WAIT}s (RECONCILE_INTERVAL is 5s, so many cycles)"
-    reconciles_before=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -c "Reconciliation completed successfully" || true)
-    healed=$(wait_for_reachable "$SVC_A" "$SELFHEAL_WAIT")
-    reconciles_after=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -c "Reconciliation completed successfully" || true)
-    note "DockTail completed $((reconciles_after - reconciles_before)) reconcile cycle(s) during the wait"
-
-    if [ "$healed" = "-1" ]; then
-        repro "EXPM/EXP4: $SVC_A stayed unreachable for the whole tailnet across $((reconciles_after - reconciles_before)) successful DockTail reconcile cycles. The serve config is present and correct, only the advertisement is missing, and DockTail cannot see that because it reads its current state from 'tailscale serve status', which does not carry advertisement state. Nothing short of a restart recovers it - the issue #72 signature."
-        diag "EXPM/EXP4 not self-healed"
-
-        step "Confirming a single 'tailscale serve advertise' is all it takes"
-        ts serve advertise "$SVC_A" >/dev/null 2>&1
-        back=$(wait_for_reachable "$SVC_A" 60)
-        if [ "$back" = "-1" ]; then
-            harness "$SVC_A did not recover even after an explicit 'serve advertise'"
-        else
-            note "recovered ${back}s after 'tailscale serve advertise $SVC_A' - the repair DockTail never performs"
-        fi
-    else
-        ok "DockTail self-healed the lost advertisement after ${healed}s"
-    fi
+    step "Confirming a single 'tailscale serve advertise' is all it takes"
+    ts serve advertise "$SVC_A" >/dev/null 2>&1
+    back=$(wait_for_reachable "$SVC_A" 60)
+    [ "$back" = "-1" ] && harness "$SVC_A did not recover even after an explicit 'serve advertise'" \
+                       || note "recovered ${back}s after 'tailscale serve advertise' - the repair DockTail never performs"
+elif [ "$still_advertised" = "yes" ]; then
+    metric_valid="yes"
+    ok "DockTail (or tailscaled) restored the advertisement on its own; see the action log above for what did it"
+else
+    metric_valid="no"
+    harness "METRIC INVALID: $SVC_A is reachable again while prefs.AdvertiseServices still does not contain it, so reachability does not track advertisement and cannot be used as ground truth."
+    diag "EXPM reachable while not advertised"
 fi
 
 # ==============================================================================
@@ -568,6 +611,18 @@ for i in $(seq 1 "$FLAP_ITERATIONS"); do
         break
     fi
     ok "iteration $i: recovered after ${recovered}s"
+
+    # Only the last iteration gets the long watch, to keep the run bounded.
+    if [ "$i" -eq "$FLAP_ITERATIONS" ]; then
+        step "Sustained watch: does it STAY reachable for ${SUSTAINED_WATCH}s?"
+        drops=$(watch_reachability "$SVC_A" "$SUSTAINED_WATCH" "post-replacement")
+        if [ "$drops" -gt 0 ] 2>/dev/null; then
+            repro "EXP2: $SVC_A came back after the replacement but then dropped out again ($drops failed samples after the first success) with no further change to its config. This is the reported 'back online for a few seconds then offline again' behaviour."
+            diag "EXP2 sustained watch drop"
+        else
+            ok "stayed reachable for the full ${SUSTAINED_WATCH}s"
+        fi
+    fi
 done
 
 # ==============================================================================
@@ -664,6 +719,14 @@ else
             ok "restart: $svc recovered after ${recovered}s"
         fi
     done
+    step "Sustained watch after restart: does $SVC_A STAY reachable for ${SUSTAINED_WATCH}s?"
+    drops=$(watch_reachability "$SVC_A" "$SUSTAINED_WATCH" "post-restart")
+    if [ "$drops" -gt 0 ] 2>/dev/null; then
+        repro "EXP5: $SVC_A came back after the DockTail restart but then dropped out again ($drops failed samples after the first success)."
+        diag "EXP5 sustained watch drop"
+    else
+        ok "stayed reachable for the full ${SUSTAINED_WATCH}s after restart"
+    fi
 fi
 
 # ==============================================================================
