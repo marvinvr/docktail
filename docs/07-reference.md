@@ -15,6 +15,10 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `DELETE_UNUSED_SERVICES` | `false` | When `true`, DockTail deletes tailnet Service definitions that no host advertises anymore. Requires API credentials. See [Cleanup Behavior](#cleanup-behavior). |
 | `SKIP_SHUTDOWN_CLEANUP` | `false` | When `true`, DockTail leaves its services and Funnels advertised on shutdown instead of draining and clearing them. This can keep ports exposed on the tailnet beyond what your current labels define; see [Cleanup Behavior](#cleanup-behavior). |
 | `LOG_LEVEL` | `info` | Logging level: `debug`, `info`, `warn`, or `error`. |
+| `DIAGNOSTICS` | `false` | When `true`, DockTail records the node's Tailscale service hosting state to a file for troubleshooting. See [Diagnostics](#diagnostics). |
+| `DIAGNOSTICS_FILE` | `/diagnostics/docktail-diagnostics.jsonl` | Where diagnostics records are appended. Mount a volume at this path to keep them. Set to an empty value to record to the log only. |
+| `DIAGNOSTICS_INTERVAL` | `10s` | How often diagnostics samples the hosting state. |
+| `DIAGNOSTICS_HEARTBEAT` | `10m` | How often a record is written even when nothing changed, so a quiet period is distinguishable from a stopped agent. |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. |
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Tailscale daemon socket. |
@@ -108,6 +112,56 @@ Because the decision is based on the tailnet-wide advertiser count, this is safe
 This cleanup runs only during reconciliation, not during shutdown, so restarting DockTail does not delete and recreate the Services of still-running containers.
 
 > **Note:** When enabled, DockTail may also delete Service definitions it did not create if they have no advertising hosts (for example, a Service you defined in the admin console but never advertised). Add such names to `IGNORE_SERVICE_NAMES` to protect them.
+
+### Diagnostics
+
+Diagnostics is an opt-in troubleshooting mode for the case where a Service shows
+as offline in the admin console while its container is healthy and DockTail's
+own logs look clean. It is completely inert unless `DIAGNOSTICS=true`.
+
+A node hosts a Tailscale Service only when two independent pieces of local state
+agree:
+
+1. the **serve config** carries handlers for it, and
+2. **`prefs.AdvertiseServices`** lists it.
+
+`tailscale serve status` — the command DockTail's reconciliation is based on —
+shows only the first. A service that has serve config but is not advertised
+therefore looks completely healthy to DockTail while being unreachable to the
+rest of the tailnet. Diagnostics records both halves so that state is visible.
+
+Enable it by setting `DIAGNOSTICS=true` and mounting a volume for the output:
+
+```yaml
+services:
+  docktail:
+    image: ghcr.io/marvinvr/docktail:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/tailscale:/var/run/tailscale
+      - ./docktail-diagnostics:/diagnostics
+    environment:
+      - DIAGNOSTICS=true
+```
+
+Each record is one JSON line, written when the state changes and on the
+heartbeat interval:
+
+| Field | Meaning |
+| --- | --- |
+| `reason` | `start`, `change`, `heartbeat`, `stop`, or `error`. |
+| `advertise_services` | The services this node currently advertises (`prefs.AdvertiseServices`). |
+| `services[]` | Per service: ports, backend destination, and the `configured` / `advertised` pair. |
+| `vip_fingerprint` | The exact tuple Tailscale hashes to decide whether to notify the Control Plane. The backend destination is not part of it, so re-pointing a service at a new container IP never changes it. |
+| `daemon_health` | Health warnings reported by `tailscaled` itself. |
+| `anomalies` | Services whose two halves disagree, for example configured but not advertised. |
+
+Anomalies are also logged as warnings, once when they appear and once when they
+clear, so they are visible without reading the file.
+
+The file grows only when something changes, so it is safe to leave running for
+days. It contains service names, ports, backend container IPs and node IDs; it
+contains no credentials.
 
 ### Useful Links
 

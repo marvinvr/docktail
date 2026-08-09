@@ -15,10 +15,15 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/marvinvr/docktail/cloud"
+	"github.com/marvinvr/docktail/diag"
 	"github.com/marvinvr/docktail/docker"
 	"github.com/marvinvr/docktail/reconciler"
 	"github.com/marvinvr/docktail/tailscale"
 )
+
+// agentVersion is set at build time (see the Dockerfile ldflags) and recorded in
+// diagnostics output so a captured log can be tied to a specific build.
+var agentVersion = "dev"
 
 func main() {
 	// Setup logging
@@ -142,6 +147,15 @@ func main() {
 				Str("fingerprint", collector.Fingerprint()).
 				Msg("DockTail Cloud reporting enabled")
 		}
+	}
+
+	// Optional: diagnostics recorder. Inert unless DIAGNOSTICS=true. It records
+	// the half of a service's hosting state that the reconciler never reads
+	// (prefs.AdvertiseServices), which is what makes a service offline to the
+	// tailnet while DockTail's own logs look clean.
+	if diag.Enabled() {
+		recorder := diag.New(diag.LoadConfig(), tailscaleClient, agentVersion)
+		go recorder.Run(ctx)
 	}
 
 	sigChan := make(chan os.Signal, 1)
