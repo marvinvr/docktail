@@ -86,6 +86,17 @@ services:
       - TAILSCALE_OAUTH_CLIENT_SECRET_FILE=/run/secrets/docktail/tailscale_oauth_client_secret
       - TAILSCALE_TAILNET=${TS_TAILNET:-}
 
+  # Backend for the hand-driven service in EXP1. No DockTail labels, so DockTail
+  # ignores it; it exists purely so `tailscale serve --service=... 127.0.0.1:18081`
+  # points at something that actually answers. The Tailscale host container runs
+  # with network_mode: host, so a published host port is reachable as 127.0.0.1.
+  manual-backend:
+    image: nginx:alpine
+    container_name: e2e-flap-manual-backend
+    restart: "no"
+    ports:
+      - "18081:80"
+
   app-a:
     image: nginx:alpine
     container_name: e2e-flap-a

@@ -26,14 +26,15 @@
 # hash changes. So any teardown/re-add cycle that lands back on its original
 # hash gives control exactly one chance to observe the truth.
 #
-# EXPM  measurement validation: drain a service and require the observer to lose
-#       reachability. Without this a green run proves nothing.
-# EXP0  baseline reachability of an HTTP and an HTTPS service
-# EXP1  manual flap: drain+clear+re-serve by hand, no DockTail involved
-# EXP2  DockTail flap: container replacement (the actual issue #72 path)
-# EXP2B burst: several replacements back to back with no settling in between
-# EXP2C slow replacement: a long gap between teardown and re-add
-# EXP3  revival probe: does touching an unrelated service un-stick a dead one
+# EXP0      baseline reachability of an HTTP and an HTTPS service
+# EXPM/EXP4 drain a service: validates the metric, then measures whether
+#           DockTail ever repairs a lost advertisement on its own
+# EXP1      manual flap: drain+clear+re-serve by hand, no DockTail involved
+# EXP2      DockTail flap: container replacement (the actual issue #72 path)
+# EXP2B     burst: several replacements back to back with no settling between
+# EXP2C     slow replacement: a long gap between teardown and re-add
+# EXP5      DockTail restart: shutdown cleanup clears every service at once
+# EXP3      revival probe: does touching an unrelated service un-stick a dead one
 #
 # Exits 1 when the bug is provoked (TDD: red while the bug exists, green after
 # the fix), and 2 on harness/infra failure or an unvalidated measurement.
@@ -53,6 +54,8 @@ DRAIN_OBSERVE=90
 FLAP_ITERATIONS="${FLAP_ITERATIONS:-3}"
 BURST_SIZE="${BURST_SIZE:-5}"
 SLOW_GAP="${SLOW_GAP:-20}"
+SELFHEAL_WAIT="${SELFHEAL_WAIT:-90}"
+SIDECAR_BACKEND_PORT="${SIDECAR_BACKEND_PORT:-18081}"
 SCRIPT_TIMEOUT="${SCRIPT_TIMEOUT:-1700}"
 
 SVC_A="svc:e2e-flap-a"             # http/80,  DockTail-managed, primary probe
@@ -395,44 +398,66 @@ t_b=$(wait_for_reachable "$SVC_B" 60)
 diag "EXP0 steady state"
 
 # ==============================================================================
-# EXPM - Measurement validation
+# EXPM / EXP4 - Measurement validation AND the self-heal test
 # ==============================================================================
+#
+# Draining a service removes it from prefs.AdvertiseServices but leaves the
+# serve config untouched. That is exactly the "configured but not advertised"
+# state, and it is what the node ends up in whenever an advertisement is lost
+# for any reason - a failed EditPrefs (the tailscale CLI discards that error,
+# cmd/tailscale/cli/serve_v2.go), a control-plane view that went stale, or a
+# teardown that never got its re-add.
+#
+# Two things are being measured here:
+#   1. that the observer loses a drained service     -> validates the metric
+#   2. whether DockTail ever notices and repairs it  -> the actual defect
+#
+# DockTail reads its "current state" from `tailscale serve status`, which still
+# lists the service in this state, so it should report a clean reconcile while
+# the service is unreachable to the whole tailnet. That is the "logs show
+# nothing special, only a restart fixes it" signature from issue #72.
 
-log "EXPM  Measurement validation: does a drained service become unreachable?"
+log "EXPM/EXP4  Drain $SVC_A: validate the metric, then check whether DockTail self-heals"
 
-step "Creating $SVC_MANUAL and advertising it by hand"
-api_create_service "$SVC_MANUAL" "80" >/dev/null
-ts serve --service="$SVC_MANUAL" --http=80 "http://127.0.0.1:80" >/dev/null 2>&1
-sleep 3
-VIP_MANUAL=$(service_vip "$SVC_MANUAL")
-echo "  $SVC_MANUAL VIP: ${VIP_MANUAL:-<none>}"
+step "Draining $SVC_A (serve config stays, advertisement is removed)"
+ts serve drain "$SVC_A" >/dev/null 2>&1
+sleep 2
 
-manual_initial=$(wait_for_reachable "$SVC_MANUAL" "$BASELINE_BUDGET")
-if [ "$manual_initial" = "-1" ]; then
-    harness "$SVC_MANUAL never became reachable; measurement validation inconclusive"
-    diag "EXPM setup failure"
+if local_is_advertised "$SVC_A"; then
+    harness "drain did not remove $SVC_A from prefs.AdvertiseServices"
 else
-    ok "$SVC_MANUAL reachable after ${manual_initial}s"
+    note "local state: advertised=no, serve config $( local_serve_ok "$SVC_A" && echo present || echo absent )"
+fi
 
-    step "Draining $SVC_MANUAL; the observer must lose it"
-    ts serve drain "$SVC_MANUAL" >/dev/null 2>&1
-    sleep 2
-    local_is_advertised "$SVC_MANUAL" && harness "drain did not remove $SVC_MANUAL from prefs.AdvertiseServices"
+gone=$(wait_for_unreachable "$SVC_A" 60)
+if [ "$gone" = "-1" ]; then
+    metric_valid="no"
+    harness "METRIC INVALID: $SVC_A still reachable 60s after being drained; reachability cannot tell online from offline. Everything else this run is inconclusive."
+    diag "EXPM drained but still reachable"
+else
+    metric_valid="yes"
+    ok "METRIC VALID: drained service became unreachable after ${gone}s"
 
-    gone=$(wait_for_unreachable "$SVC_MANUAL" "$DRAIN_OBSERVE")
-    if [ "$gone" = "-1" ]; then
-        metric_valid="no"
-        harness "METRIC INVALID: $SVC_MANUAL is still reachable ${DRAIN_OBSERVE}s after being drained, so reachability cannot distinguish an online service from an offline one. Every other result this run is inconclusive."
-        diag "EXPM drained but still reachable"
+    step "Leaving DockTail to reconcile for ${SELFHEAL_WAIT}s (RECONCILE_INTERVAL is 5s, so many cycles)"
+    reconciles_before=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -c "Reconciliation completed successfully" || true)
+    healed=$(wait_for_reachable "$SVC_A" "$SELFHEAL_WAIT")
+    reconciles_after=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -c "Reconciliation completed successfully" || true)
+    note "DockTail completed $((reconciles_after - reconciles_before)) reconcile cycle(s) during the wait"
+
+    if [ "$healed" = "-1" ]; then
+        repro "EXPM/EXP4: $SVC_A stayed unreachable for the whole tailnet across $((reconciles_after - reconciles_before)) successful DockTail reconcile cycles. The serve config is present and correct, only the advertisement is missing, and DockTail cannot see that because it reads its current state from 'tailscale serve status', which does not carry advertisement state. Nothing short of a restart recovers it - the issue #72 signature."
+        diag "EXPM/EXP4 not self-healed"
+
+        step "Confirming a single 'tailscale serve advertise' is all it takes"
+        ts serve advertise "$SVC_A" >/dev/null 2>&1
+        back=$(wait_for_reachable "$SVC_A" 60)
+        if [ "$back" = "-1" ]; then
+            harness "$SVC_A did not recover even after an explicit 'serve advertise'"
+        else
+            note "recovered ${back}s after 'tailscale serve advertise $SVC_A' - the repair DockTail never performs"
+        fi
     else
-        metric_valid="yes"
-        ok "METRIC VALID: drained service became unreachable after ${gone}s"
-
-        step "Re-advertising $SVC_MANUAL"
-        ts serve advertise "$SVC_MANUAL" >/dev/null 2>&1
-        back=$(wait_for_reachable "$SVC_MANUAL" 90)
-        [ "$back" = "-1" ] && harness "$SVC_MANUAL did not come back after 'serve advertise'" \
-                           || ok "$SVC_MANUAL back after ${back}s"
+        ok "DockTail self-healed the lost advertisement after ${healed}s"
     fi
 fi
 
@@ -442,25 +467,39 @@ fi
 
 log "EXP1  Manual flap (drain + clear + re-serve), ${FLAP_ITERATIONS} iterations"
 
-for i in $(seq 1 "$FLAP_ITERATIONS"); do
-    step "Iteration $i: drain -> clear -> re-serve"
-    ts serve drain "$SVC_MANUAL" >/dev/null 2>&1
-    ts serve clear "$SVC_MANUAL" >/dev/null 2>&1
-    ts serve --service="$SVC_MANUAL" --http=80 "http://127.0.0.1:80" >/dev/null 2>&1
+step "Creating $SVC_MANUAL with a backend that actually listens"
+api_create_service "$SVC_MANUAL" "80" >/dev/null
+ts serve --service="$SVC_MANUAL" --http=80 "http://127.0.0.1:${SIDECAR_BACKEND_PORT}" >/dev/null 2>&1
+sleep 3
+VIP_MANUAL=$(service_vip "$SVC_MANUAL")
+echo "  $SVC_MANUAL VIP: ${VIP_MANUAL:-<none>} backend: http://127.0.0.1:${SIDECAR_BACKEND_PORT}"
 
-    if ! local_serve_ok "$SVC_MANUAL"; then
-        harness "iteration $i: local serve config missing right after re-serve"
-        continue
-    fi
+manual_initial=$(wait_for_reachable "$SVC_MANUAL" "$BASELINE_BUDGET")
+if [ "$manual_initial" = "-1" ]; then
+    harness "$SVC_MANUAL never became reachable, so the manual-flap iterations would only re-measure a broken setup; skipping EXP1"
+    diag "EXP1 setup failure"
+else
+    ok "$SVC_MANUAL reachable after ${manual_initial}s"
+    for i in $(seq 1 "$FLAP_ITERATIONS"); do
+        step "Iteration $i: drain -> clear -> re-serve"
+        ts serve drain "$SVC_MANUAL" >/dev/null 2>&1
+        ts serve clear "$SVC_MANUAL" >/dev/null 2>&1
+        ts serve --service="$SVC_MANUAL" --http=80 "http://127.0.0.1:${SIDECAR_BACKEND_PORT}" >/dev/null 2>&1
 
-    recovered=$(wait_for_reachable "$SVC_MANUAL" "$FLAP_BUDGET")
-    if [ "$recovered" = "-1" ]; then
-        repro "EXP1 iteration $i: $SVC_MANUAL unreachable from another tailnet device ${FLAP_BUDGET}s after a drain/clear/re-serve cycle, while its local serve config and prefs are correct"
-        diag "EXP1 iteration $i stuck"
-        break
-    fi
-    ok "iteration $i: recovered after ${recovered}s"
-done
+        if ! local_serve_ok "$SVC_MANUAL"; then
+            harness "iteration $i: local serve config missing right after re-serve"
+            continue
+        fi
+
+        recovered=$(wait_for_reachable "$SVC_MANUAL" "$FLAP_BUDGET")
+        if [ "$recovered" = "-1" ]; then
+            repro "EXP1 iteration $i: $SVC_MANUAL unreachable from another tailnet device ${FLAP_BUDGET}s after a drain/clear/re-serve cycle, while its local serve config and prefs are correct"
+            diag "EXP1 iteration $i stuck"
+            break
+        fi
+        ok "iteration $i: recovered after ${recovered}s"
+    done
+fi
 
 # ==============================================================================
 # EXP2 - DockTail flap: container replacement (issue #72 path)
@@ -594,6 +633,38 @@ dump_sampler_transitions "$SVC_A"
 echo ""
 echo "  DockTail's view of the replacements:"
 docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -iE "e2e-flap-a" | grep -iE "removing|drain|clear|adding|added|changed|fail" | tail -40 | sed 's/^/    /'
+
+# ==============================================================================
+# EXP5 - DockTail restart
+# ==============================================================================
+#
+# On shutdown DockTail drains and clears every service it manages, then re-adds
+# them all on boot. That is the largest available burst of ServicesHash churn,
+# and it matches the report that a stack restart brings services back "for a few
+# seconds" before they go offline again.
+
+log "EXP5  DockTail restart (shutdown cleanup clears every service, boot re-adds them)"
+
+start_sampler "exp5"
+docker restart "$DOCKTAIL_CONTAINER" >/dev/null 2>&1
+wait_local_restored "$SVC_A"; converged=$?
+sleep 3
+stop_sampler
+
+if [ "$converged" -ne 0 ]; then
+    harness "restart: DockTail never restored the local serve config for $SVC_A"
+else
+    note "local serve config restored after restart"
+    for svc in "$SVC_A" "$SVC_B"; do
+        recovered=$(wait_for_reachable "$svc" "$FLAP_BUDGET")
+        if [ "$recovered" = "-1" ]; then
+            repro "EXP5: $svc unreachable ${FLAP_BUDGET}s after a DockTail restart, while its local serve config is healthy"
+            diag "EXP5 $svc stuck"
+        else
+            ok "restart: $svc recovered after ${recovered}s"
+        fi
+    done
+fi
 
 # ==============================================================================
 # EXP3 - Revival probe
