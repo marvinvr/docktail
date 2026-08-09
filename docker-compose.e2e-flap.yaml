@@ -67,6 +67,9 @@ services:
       - "docktail.service.name=e2e-flap-a"
       - "docktail.service.port=80"
 
+  # HTTPS/443 on purpose: issue #72 reporters singled out 443/HTTPS services as
+  # the ones that go Offline, and HTTPS additionally drags TLS cert
+  # provisioning into the re-advertise path. This is the main flap target.
   app-b:
     image: nginx:alpine
     container_name: e2e-flap-b
@@ -75,6 +78,8 @@ services:
       - "docktail.service.enable=true"
       - "docktail.service.name=e2e-flap-b"
       - "docktail.service.port=80"
+      - "docktail.service.service-port=443"
+      - "docktail.service.service-protocol=https"
 
 volumes:
   ts-state:

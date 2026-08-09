@@ -6,8 +6,8 @@
 # The reported symptom is that a Tailscale Service goes Offline / "0 hosts" in
 # the admin console while the local serve config is perfectly healthy, and that
 # it recovers only on a DockTail restart, when an unrelated service is touched,
-# or after hours. Local `tailscale serve status` therefore proves nothing; the
-# only ground truth is the Control Plane's view of who hosts the Service:
+# or after several hours. Local `tailscale serve status` therefore proves
+# nothing; the ground truth has to come from the Control Plane:
 #
 #   GET /api/v2/tailnet/<tailnet>/services/<svc>/devices  ->  .hosts[]
 #
@@ -20,11 +20,16 @@
 # hash changes. So any teardown/re-add cycle that lands back on its original
 # hash gives control exactly one chance to observe the truth.
 #
-# The experiments below drive that cycle and check the Control Plane afterwards:
-#   EXP0  baseline: how long a freshly created service takes to reach >=1 host
-#   EXP1  manual flap: drain+clear+re-serve by hand (no DockTail involvement)
-#   EXP2  DockTail flap: container replacement, i.e. the actual issue #72 path
-#   EXP3  revival probe: does touching an unrelated service un-stick a dead one
+# EXPM  measurement validation: does /devices actually drop a drained host?
+#       Without this every other result is meaningless, because a registry that
+#       never forgets a host cannot show the reported symptom.
+# EXP0  baseline host registration for an HTTP and an HTTPS service
+# EXP1  manual flap: drain+clear+re-serve by hand, no DockTail involved
+# EXP2  DockTail flap: container replacement (the actual issue #72 path), run
+#       against the HTTPS/443 service because reporters singled those out
+# EXP2B burst: several replacements back to back with no settling in between
+# EXP2C slow replacement: a long gap between teardown and re-add
+# EXP3  revival probe: does touching an unrelated service un-stick a dead one
 #
 # Exits 1 when the bug is provoked (TDD: red while the bug exists, green after
 # the fix), and 2 on harness/infra failure.
@@ -37,19 +42,23 @@ API_BASE="https://api.tailscale.com/api/v2"
 API_TAILNET="${TS_TAILNET:--}"
 
 MAX_WAIT=120           # tailscaled backend Running
-BASELINE_BUDGET=150    # first-ever host registration may include approval
-FLAP_BUDGET=75         # a healthy re-advertise is expected well inside this
+BASELINE_BUDGET=150    # first-ever registration can include approval + certs
+FLAP_BUDGET=90         # a healthy re-advertise is expected well inside this
+DRAIN_OBSERVE=90       # how long to watch a deliberately drained service
 FLAP_ITERATIONS="${FLAP_ITERATIONS:-3}"
-SCRIPT_TIMEOUT="${SCRIPT_TIMEOUT:-1500}"
+BURST_SIZE="${BURST_SIZE:-5}"
+SLOW_GAP="${SLOW_GAP:-20}"
+SCRIPT_TIMEOUT="${SCRIPT_TIMEOUT:-1700}"
 
-SVC_A="svc:e2e-flap-a"        # DockTail-managed, target of EXP2
-SVC_B="svc:e2e-flap-b"        # DockTail-managed, second service
-SVC_MANUAL="svc:e2e-flap-manual"   # hand-driven, target of EXP1
+SVC_A="svc:e2e-flap-a"             # DockTail-managed, http/80,  unrelated service
+SVC_B="svc:e2e-flap-b"             # DockTail-managed, https/443, main flap target
+SVC_MANUAL="svc:e2e-flap-manual"   # hand-driven, used by EXPM and EXP1
 SVC_PROBE="svc:e2e-flap-probe"     # hand-driven, hash poke for EXP3
 
 repro_hits=0
 harness_errors=0
 findings=""
+metric_valid="unknown"
 
 ( sleep "$SCRIPT_TIMEOUT" && echo "ERROR: harness timed out after ${SCRIPT_TIMEOUT}s" && kill $$ ) 2>/dev/null &
 TIMEOUT_PID=$!
@@ -57,6 +66,7 @@ TIMEOUT_PID=$!
 log()     { echo ""; echo "=== $1"; }
 step()    { echo "  -- $1"; }
 ok()      { echo "  OK: $1"; }
+note()    { echo "  ..  $1"; }
 repro()   { echo "  REPRO: $1"; repro_hits=$((repro_hits + 1)); findings="${findings}\n  - $1"; }
 harness() { echo "  HARNESS-ERROR: $1"; harness_errors=$((harness_errors + 1)); }
 
@@ -65,7 +75,6 @@ cleanup() {
     kill "$TIMEOUT_PID" 2>/dev/null || true
     docker rm -f e2e-flap-a e2e-flap-b >/dev/null 2>&1 || true
     docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
-    # Defined further down; a preflight failure can trip this trap before then.
     command -v sweep_flap_services >/dev/null 2>&1 && sweep_flap_services
     rm -rf "$E2E_SECRETS_DIR"
 }
@@ -94,14 +103,10 @@ API_TOKEN=$(mint_api_token)
 [ -z "$API_TOKEN" ] && { echo "ERROR: could not mint an API token"; exit 2; }
 echo "  API token minted for tailnet ${API_TAILNET}"
 
-TOKEN_RESPONSE=$(curl -s -X POST "${API_BASE}/oauth/token" \
-    -u "${TS_OAUTH_CLIENT_ID}:${TS_OAUTH_CLIENT_SECRET}" \
-    -d "grant_type=client_credentials")
-TS_TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.access_token // empty')
 KEY_RESPONSE=$(curl -s -X POST "${API_BASE}/tailnet/${API_TAILNET}/keys" \
-    -H "Authorization: Bearer ${TS_TOKEN}" \
+    -H "Authorization: Bearer ${API_TOKEN}" \
     -H "Content-Type: application/json" \
-    -d '{"capabilities":{"devices":{"create":{"reusable":false,"ephemeral":true,"tags":["tag:ci-test"]}}},"expirySeconds":1800}')
+    -d '{"capabilities":{"devices":{"create":{"reusable":false,"ephemeral":true,"tags":["tag:ci-test"]}}},"expirySeconds":3600}')
 TS_AUTHKEY=$(echo "$KEY_RESPONSE" | jq -r '.key // empty')
 [ -z "$TS_AUTHKEY" ] && { echo "ERROR: failed to generate auth key"; echo "$KEY_RESPONSE"; exit 2; }
 export TS_AUTHKEY
@@ -117,15 +122,12 @@ chmod 600 "$E2E_SECRETS_DIR"/*
 # Helpers
 # ==============================================================================
 
-# Stderr is deliberately left alone: callers that parse JSON redirect it away,
-# callers that want to see CLI errors keep it.
 ts() { docker exec "$TS_CONTAINER" tailscale "$@"; }
 
 api_get() {
     curl -s -H "Authorization: Bearer ${API_TOKEN}" "${API_BASE}/tailnet/${API_TAILNET}/$1" 2>/dev/null || echo ""
 }
 
-# Raw .hosts array for a Service, or "null" when the call fails.
 service_hosts_json() {
     local body
     body=$(api_get "services/$1/devices")
@@ -139,6 +141,19 @@ service_host_count() {
         echo "-1"
     else
         echo "$hosts" | jq 'length' 2>/dev/null || echo "-1"
+    fi
+}
+
+# Hosts the Control Plane considers actually usable for the Service. A host that
+# is listed but no longer "ready" is just as offline to a user as one that is
+# missing, so both count as unhealthy.
+service_ready_count() {
+    local hosts
+    hosts=$(service_hosts_json "$1")
+    if [ "$hosts" = "null" ] || [ -z "$hosts" ]; then
+        echo "-1"
+    else
+        echo "$hosts" | jq '[.[] | select(.configured == "ready")] | length' 2>/dev/null || echo "-1"
     fi
 }
 
@@ -164,12 +179,12 @@ sweep_flap_services() {
     done
 }
 
-# Poll the Control Plane until a Service has at least one host. Echoes the
-# elapsed seconds on success, or -1 on timeout.
-wait_for_hosts() {
+# Poll until a Service has at least one READY host. Echoes elapsed seconds, or
+# -1 on timeout.
+wait_for_ready_host() {
     local svc="$1" budget="$2" elapsed=0 count
     while [ "$elapsed" -lt "$budget" ]; do
-        count=$(service_host_count "$svc")
+        count=$(service_ready_count "$svc")
         if [ "$count" -ge 1 ] 2>/dev/null; then
             echo "$elapsed"
             return 0
@@ -181,13 +196,16 @@ wait_for_hosts() {
     return 1
 }
 
-# Local serve config presence (what DockTail and the user both see as "healthy").
 local_serve_ok() {
     ts serve status --json 2>/dev/null | jq -e ".Services[\"$1\"].TCP | length > 0" >/dev/null 2>&1
 }
 
-local_advertised() {
+local_advertised_list() {
     ts debug prefs 2>/dev/null | jq -r '.AdvertiseServices // [] | join(",")' 2>/dev/null || echo "<unreadable>"
+}
+
+local_is_advertised() {
+    ts debug prefs 2>/dev/null | jq -e --arg s "$1" '(.AdvertiseServices // []) | index($s) != null' >/dev/null 2>&1
 }
 
 diag() {
@@ -196,23 +214,21 @@ diag() {
     echo "  ---------- DIAGNOSTICS: $label ----------"
     echo "  [local] serve status --json:"
     ts serve status --json 2>/dev/null | jq -c '.Services | to_entries | map({svc: .key, tcp: (.value.TCP | keys)})' 2>/dev/null | sed 's/^/    /' || echo "    <unparseable>"
-    echo "  [local] prefs.AdvertiseServices: $(local_advertised)"
+    echo "  [local] prefs.AdvertiseServices: $(local_advertised_list)"
     echo "  [local] serve get-config --all:"
     ts serve get-config --all 2>&1 | sed 's/^/    /'
-    echo "  [control] service definitions + hosts:"
+    echo "  [control] full service objects and hosts:"
     for svc in "$SVC_A" "$SVC_B" "$SVC_MANUAL" "$SVC_PROBE"; do
-        echo "    ${svc}: def=$(api_get "services/${svc}" | jq -c '{ports,tags}' 2>/dev/null) hosts=$(service_hosts_json "$svc")"
+        echo "    ${svc}"
+        echo "      def   = $(api_get "services/${svc}")"
+        echo "      hosts = $(api_get "services/${svc}/devices")"
     done
-    echo "  [tailscaled] recent c2n / vip-service log lines:"
-    docker logs "$TS_CONTAINER" 2>&1 | grep -iE "vip-service|c2n|advertis" | tail -25 | sed 's/^/    /' || echo "    <none>"
+    echo "  [tailscaled] recent c2n / advertise log lines:"
+    docker logs "$TS_CONTAINER" 2>&1 | grep -iE "vip-service|c2n|advertis|cert" | tail -30 | sed 's/^/    /' || echo "    <none>"
     echo "  ----------------------------------------"
     echo ""
 }
 
-# High-resolution sampler of the *local* two-part state, run inside the
-# Tailscale container so a sample costs no docker-exec round trip. This is what
-# shows the intermediate windows (advertised-with-no-ports, config-without-
-# advertisement) that a 5s-resolution poll from outside would never catch.
 install_sampler() {
     cat > /tmp/flap-sampler.sh <<'SAMPLER'
 #!/bin/sh
@@ -245,8 +261,6 @@ stop_sampler() {
     sleep 1
 }
 
-# Print the sampled state transitions for one service: only lines where the
-# (ports, advertised) pair changed, so the flap sequence is readable.
 dump_sampler_transitions() {
     local svc="$1"
     docker exec "$TS_CONTAINER" cat /tmp/flap.samples 2>/dev/null | python3 -c "
@@ -279,11 +293,27 @@ for line in sys.stdin:
         flag = ''
         if advertised == 'yes' and ports in ('ABSENT', 'NO-PORTS'):
             flag = '   <-- advertised with no ports'
-        elif advertised == 'no' and ports not in ('ABSENT',):
+        elif advertised == 'no' and ports != 'ABSENT':
             flag = '   <-- config present but NOT advertised'
         print(f'    {seq:<8} {tstamp}  {ports:<20} {advertised}{flag}')
         last = state
 " "$svc" 2>/dev/null || echo "    <sampler output unavailable>"
+}
+
+# Watch the Control Plane's view of a Service and print every distinct
+# observation, so a transient dip is visible rather than averaged away.
+observe_hosts() {
+    local svc="$1" duration="$2" elapsed=0 last="" cur
+    while [ "$elapsed" -lt "$duration" ]; do
+        cur=$(service_hosts_json "$svc")
+        if [ "$cur" != "$last" ]; then
+            echo "    t+${elapsed}s: $cur"
+            last="$cur"
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+    echo "$last"
 }
 
 # ==============================================================================
@@ -316,172 +346,258 @@ echo "  Service host node ID: ${NODE_ID:-<unknown>}"
 set +e
 
 # ==============================================================================
-# EXP0 - Baseline: how long does a fresh DockTail service take to reach 1 host?
+# EXP0 - Baseline
 # ==============================================================================
 
-log "EXP0  Baseline: time to first host registration"
+log "EXP0  Baseline: time to first ready host"
 
-baseline_a=$(wait_for_hosts "$SVC_A" "$BASELINE_BUDGET")
-if [ "$baseline_a" = "-1" ]; then
-    echo "  $SVC_A never reached >=1 host within ${BASELINE_BUDGET}s"
-    diag "EXP0 baseline failure"
-    # This is itself issue-#72-shaped (a brand new service that never comes
-    # online), so record it rather than bailing out.
-    repro "EXP0: freshly created $SVC_A never registered a host (${BASELINE_BUDGET}s budget) while local serve config was $( local_serve_ok "$SVC_A" && echo healthy || echo missing )"
-else
-    ok "$SVC_A reached >=1 host after ${baseline_a}s"
-fi
-
-baseline_b=$(wait_for_hosts "$SVC_B" "$BASELINE_BUDGET")
-if [ "$baseline_b" = "-1" ]; then
-    repro "EXP0: freshly created $SVC_B never registered a host (${BASELINE_BUDGET}s budget)"
-else
-    ok "$SVC_B reached >=1 host after ${baseline_b}s"
-fi
+for svc in "$SVC_A" "$SVC_B"; do
+    t=$(wait_for_ready_host "$svc" "$BASELINE_BUDGET")
+    if [ "$t" = "-1" ]; then
+        repro "EXP0: freshly created $svc never reached a ready host within ${BASELINE_BUDGET}s (local serve config $( local_serve_ok "$svc" && echo healthy || echo missing ))"
+        diag "EXP0 $svc never registered"
+    else
+        ok "$svc reached a ready host after ${t}s"
+    fi
+done
 
 diag "EXP0 steady state"
 
 # ==============================================================================
-# EXP1 - Manual flap: drain + clear + immediate re-serve, no DockTail involved
+# EXPM - Measurement validation
 # ==============================================================================
 #
-# Isolates the mechanism from DockTail entirely: it performs exactly the CLI
-# sequence DockTail runs when a container disappears and comes straight back.
-# If the Control Plane loses the host here, the flap alone is sufficient to
-# cause the reported symptom.
+# Everything downstream assumes /devices reflects whether the node is CURRENTLY
+# advertising. If it is really a configuration/approval registry that keeps a
+# host listed after it stops advertising, then it cannot show the reported
+# symptom and the whole harness is measuring the wrong thing. Find out by
+# draining a service and leaving it drained.
 
-log "EXP1  Manual flap (drain + clear + re-serve), ${FLAP_ITERATIONS} iterations"
+log "EXPM  Measurement validation: does /devices drop a drained host?"
 
-step "Creating $SVC_MANUAL definition and advertising it by hand"
+step "Creating $SVC_MANUAL and advertising it by hand"
 api_create_service "$SVC_MANUAL" "80" >/dev/null
 ts serve --service="$SVC_MANUAL" --http=80 "http://127.0.0.1:80" >/dev/null 2>&1
 
-manual_initial=$(wait_for_hosts "$SVC_MANUAL" "$BASELINE_BUDGET")
+manual_initial=$(wait_for_ready_host "$SVC_MANUAL" "$BASELINE_BUDGET")
 if [ "$manual_initial" = "-1" ]; then
-    harness "$SVC_MANUAL never came online at all; EXP1 cannot distinguish flap damage from setup failure"
-    diag "EXP1 setup failure"
+    harness "$SVC_MANUAL never came online; measurement validation is inconclusive"
+    diag "EXPM setup failure"
 else
-    ok "$SVC_MANUAL online after ${manual_initial}s"
+    ok "$SVC_MANUAL ready after ${manual_initial}s"
 
-    for i in $(seq 1 "$FLAP_ITERATIONS"); do
-        step "Iteration $i: drain -> clear -> re-serve"
-        ts serve drain "$SVC_MANUAL" >/dev/null 2>&1
-        ts serve clear "$SVC_MANUAL" >/dev/null 2>&1
-        ts serve --service="$SVC_MANUAL" --http=80 "http://127.0.0.1:80" >/dev/null 2>&1
+    step "Draining $SVC_MANUAL and leaving it drained for ${DRAIN_OBSERVE}s"
+    ts serve drain "$SVC_MANUAL" >/dev/null 2>&1
+    sleep 2
+    if local_is_advertised "$SVC_MANUAL"; then
+        harness "drain did not remove $SVC_MANUAL from prefs.AdvertiseServices"
+    else
+        note "local state after drain: advertised=no, serve config $( local_serve_ok "$SVC_MANUAL" && echo present || echo absent )"
+    fi
 
-        if ! local_serve_ok "$SVC_MANUAL"; then
-            harness "iteration $i: local serve config missing right after re-serve"
-            continue
-        fi
+    echo "    Control Plane observations while drained:"
+    observe_hosts "$SVC_MANUAL" "$DRAIN_OBSERVE" >/dev/null
+    drained_hosts=$(service_host_count "$SVC_MANUAL")
+    drained_ready=$(service_ready_count "$SVC_MANUAL")
+    note "after ${DRAIN_OBSERVE}s drained: hosts=${drained_hosts} ready=${drained_ready}"
 
-        recovered=$(wait_for_hosts "$SVC_MANUAL" "$FLAP_BUDGET")
-        if [ "$recovered" = "-1" ]; then
-            repro "EXP1 iteration $i: $SVC_MANUAL has 0 hosts ${FLAP_BUDGET}s after a drain/clear/re-serve cycle, while local serve config and prefs are correct"
-            diag "EXP1 iteration $i stuck"
-            break
-        fi
-        ok "iteration $i: recovered after ${recovered}s"
-    done
+    if [ "$drained_ready" -le 0 ] 2>/dev/null; then
+        metric_valid="yes"
+        ok "METRIC VALID: a drained host stops counting as ready, so /devices can detect the reported symptom"
+    else
+        metric_valid="no"
+        harness "METRIC INVALID: $SVC_MANUAL still reports ${drained_ready} ready host(s) ${DRAIN_OBSERVE}s after being drained. /devices does not track live advertisement, so 'hosts >= 1' cannot prove a service is online and every other result in this run is inconclusive."
+    fi
+
+    step "Re-advertising $SVC_MANUAL"
+    ts serve advertise "$SVC_MANUAL" >/dev/null 2>&1
+    back=$(wait_for_ready_host "$SVC_MANUAL" 60)
+    [ "$back" = "-1" ] && harness "$SVC_MANUAL did not come back after 'serve advertise'" || ok "$SVC_MANUAL back after ${back}s"
 fi
 
 # ==============================================================================
-# EXP2 - DockTail flap: container replacement (the actual issue #72 path)
+# EXP1 - Manual flap, no DockTail involved
 # ==============================================================================
 
-log "EXP2  DockTail flap: container replacement, ${FLAP_ITERATIONS} iterations"
+log "EXP1  Manual flap (drain + clear + re-serve), ${FLAP_ITERATIONS} iterations"
 
-APP_A_NETWORK=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' e2e-flap-a 2>/dev/null | head -1)
-echo "  e2e-flap-a network: ${APP_A_NETWORK:-<default>}"
+for i in $(seq 1 "$FLAP_ITERATIONS"); do
+    step "Iteration $i: drain -> clear -> re-serve"
+    ts serve drain "$SVC_MANUAL" >/dev/null 2>&1
+    ts serve clear "$SVC_MANUAL" >/dev/null 2>&1
+    ts serve --service="$SVC_MANUAL" --http=80 "http://127.0.0.1:80" >/dev/null 2>&1
 
-recreate_app_a() {
-    docker rm -f e2e-flap-a >/dev/null 2>&1
-    docker run -d --name e2e-flap-a --restart no \
-        ${APP_A_NETWORK:+--network "$APP_A_NETWORK"} \
+    if ! local_serve_ok "$SVC_MANUAL"; then
+        harness "iteration $i: local serve config missing right after re-serve"
+        continue
+    fi
+
+    recovered=$(wait_for_ready_host "$SVC_MANUAL" "$FLAP_BUDGET")
+    if [ "$recovered" = "-1" ]; then
+        repro "EXP1 iteration $i: $SVC_MANUAL has no ready host ${FLAP_BUDGET}s after a drain/clear/re-serve cycle, while local serve config and prefs are correct"
+        diag "EXP1 iteration $i stuck"
+        break
+    fi
+    ok "iteration $i: recovered after ${recovered}s"
+done
+
+# ==============================================================================
+# EXP2 - DockTail flap: container replacement (issue #72 path), HTTPS/443
+# ==============================================================================
+
+log "EXP2  DockTail flap: container replacement of the HTTPS service, ${FLAP_ITERATIONS} iterations"
+
+APP_B_NETWORK=$(docker inspect -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' e2e-flap-b 2>/dev/null | head -1)
+echo "  e2e-flap-b network: ${APP_B_NETWORK:-<default>}"
+
+recreate_app_b() {
+    docker rm -f e2e-flap-b >/dev/null 2>&1
+    docker run -d --name e2e-flap-b --restart no \
+        ${APP_B_NETWORK:+--network "$APP_B_NETWORK"} \
         --label "docktail.service.enable=true" \
-        --label "docktail.service.name=e2e-flap-a" \
+        --label "docktail.service.name=e2e-flap-b" \
         --label "docktail.service.port=80" \
+        --label "docktail.service.service-port=443" \
+        --label "docktail.service.service-protocol=https" \
         nginx:alpine >/dev/null 2>&1
+}
+
+wait_local_restored() {
+    local svc="$1" n
+    for n in $(seq 1 25); do
+        if local_serve_ok "$svc"; then return 0; fi
+        sleep 1
+    done
+    return 1
 }
 
 install_sampler
 for i in $(seq 1 "$FLAP_ITERATIONS"); do
-    step "Iteration $i: docker rm -f + immediate recreate of e2e-flap-a"
-    before_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' e2e-flap-a 2>/dev/null)
+    step "Iteration $i: docker rm -f + immediate recreate of e2e-flap-b"
+    before_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' e2e-flap-b 2>/dev/null)
 
-    # Sample only around the flap itself so the tight polling loop cannot
-    # perturb the (much longer) Control Plane wait that follows.
-    start_sampler "$i"
-    recreate_app_a
-    after_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' e2e-flap-a 2>/dev/null)
-
-    # Give DockTail its event-driven reconcile plus one periodic cycle.
-    converged=0
-    for _ in $(seq 1 20); do
-        if local_serve_ok "$SVC_A"; then converged=1; break; fi
-        sleep 1
-    done
+    start_sampler "exp2-$i"
+    recreate_app_b
+    after_ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' e2e-flap-b 2>/dev/null)
+    wait_local_restored "$SVC_B"; converged=$?
     sleep 2
     stop_sampler
 
     echo "    backend IP ${before_ip:-?} -> ${after_ip:-?}"
-    if [ "$converged" -ne 1 ]; then
-        harness "iteration $i: DockTail never restored the local serve config for $SVC_A"
+    if [ "$converged" -ne 0 ]; then
+        harness "iteration $i: DockTail never restored the local serve config for $SVC_B"
         continue
     fi
     echo "    local serve config restored"
 
-    recovered=$(wait_for_hosts "$SVC_A" "$FLAP_BUDGET")
+    recovered=$(wait_for_ready_host "$SVC_B" "$FLAP_BUDGET")
     if [ "$recovered" = "-1" ]; then
-        repro "EXP2 iteration $i: $SVC_A has 0 hosts ${FLAP_BUDGET}s after container replacement, while its local serve config is healthy (this is issue #72)"
+        repro "EXP2 iteration $i: $SVC_B has no ready host ${FLAP_BUDGET}s after container replacement, while its local serve config is healthy (this is issue #72)"
         diag "EXP2 iteration $i stuck"
         break
     fi
     ok "iteration $i: recovered after ${recovered}s"
 done
 
-echo ""
-echo "  Sampled local state transitions for $SVC_A (one block per iteration):"
-dump_sampler_transitions "$SVC_A"
-
-echo ""
-echo "  DockTail's view of the replacement (drain/clear/add sequence):"
-docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -iE "e2e-flap-a" | grep -iE "removing|drain|clear|adding|added|changed" | tail -30 | sed 's/^/    /'
-
 # ==============================================================================
-# EXP3 - Revival probe: does touching an unrelated service un-stick a dead one?
+# EXP2B - Burst: several replacements with no settling in between
 # ==============================================================================
 #
-# Multiple reporters describe exactly this: a service stuck at "0 hosts" comes
-# back the moment another service is added. That is the signature of a stale
-# Control Plane view that only refreshes when the node's ServicesHash changes
-# again. Only meaningful if something is actually stuck.
+# Maximises the number of ServicesHash transitions in flight at once, which is
+# the state where a stale Control Plane view is most likely to survive.
+
+log "EXP2B  Burst: ${BURST_SIZE} back-to-back replacements"
+
+start_sampler "exp2b"
+for i in $(seq 1 "$BURST_SIZE"); do
+    recreate_app_b
+    sleep 2
+done
+wait_local_restored "$SVC_B"; converged=$?
+sleep 3
+stop_sampler
+
+if [ "$converged" -ne 0 ]; then
+    harness "burst: DockTail never restored the local serve config for $SVC_B"
+else
+    recovered=$(wait_for_ready_host "$SVC_B" "$FLAP_BUDGET")
+    if [ "$recovered" = "-1" ]; then
+        repro "EXP2B: $SVC_B has no ready host ${FLAP_BUDGET}s after ${BURST_SIZE} back-to-back replacements, while its local serve config is healthy"
+        diag "EXP2B stuck"
+    else
+        ok "burst: recovered after ${recovered}s"
+    fi
+fi
+
+# ==============================================================================
+# EXP2C - Slow replacement: long gap between teardown and re-add
+# ==============================================================================
+#
+# A real image pull can leave the container gone for tens of seconds, which is
+# long enough for control to fully process the un-advertise before the re-add
+# arrives. Different race window from EXP2.
+
+log "EXP2C  Slow replacement: ${SLOW_GAP}s gap between teardown and re-add"
+
+start_sampler "exp2c"
+docker rm -f e2e-flap-b >/dev/null 2>&1
+note "container removed, waiting ${SLOW_GAP}s before recreating"
+sleep "$SLOW_GAP"
+mid_hosts=$(service_hosts_json "$SVC_B")
+note "control plane view while the container is gone: $mid_hosts"
+recreate_app_b
+wait_local_restored "$SVC_B"; converged=$?
+sleep 2
+stop_sampler
+
+if [ "$converged" -ne 0 ]; then
+    harness "slow replacement: DockTail never restored the local serve config for $SVC_B"
+else
+    recovered=$(wait_for_ready_host "$SVC_B" "$FLAP_BUDGET")
+    if [ "$recovered" = "-1" ]; then
+        repro "EXP2C: $SVC_B has no ready host ${FLAP_BUDGET}s after a slow replacement, while its local serve config is healthy"
+        diag "EXP2C stuck"
+    else
+        ok "slow replacement: recovered after ${recovered}s"
+    fi
+fi
+
+echo ""
+echo "  Sampled local state transitions for $SVC_B (one block per round):"
+dump_sampler_transitions "$SVC_B"
+
+echo ""
+echo "  DockTail's view of the replacements:"
+docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -iE "e2e-flap-b" | grep -iE "removing|drain|clear|adding|added|changed|fail" | tail -40 | sed 's/^/    /'
+
+# ==============================================================================
+# EXP3 - Revival probe
+# ==============================================================================
 
 log "EXP3  Revival probe"
 
 stuck=""
-for svc in "$SVC_A" "$SVC_B" "$SVC_MANUAL"; do
-    count=$(service_host_count "$svc")
-    if [ "$count" -le 0 ] 2>/dev/null; then
-        if local_serve_ok "$svc"; then
-            stuck="$svc"
-            break
-        fi
+for svc in "$SVC_B" "$SVC_A" "$SVC_MANUAL"; do
+    count=$(service_ready_count "$svc")
+    if [ "$count" -le 0 ] 2>/dev/null && local_serve_ok "$svc"; then
+        stuck="$svc"
+        break
     fi
 done
 
 if [ -z "$stuck" ]; then
-    echo "  SKIP: nothing is stuck (no service with healthy local config and 0 hosts)"
+    echo "  SKIP: nothing is stuck (no service with healthy local config and no ready host)"
 else
-    echo "  Stuck service: $stuck (local config healthy, control plane reports 0 hosts)"
+    echo "  Stuck service: $stuck (local config healthy, control plane reports no ready host)"
     step "Advertising an unrelated service ($SVC_PROBE) to force a ServicesHash change"
     api_create_service "$SVC_PROBE" "9443" >/dev/null
     ts serve --service="$SVC_PROBE" --https=9443 "http://127.0.0.1:80" >/dev/null 2>&1
 
-    revived=$(wait_for_hosts "$stuck" 60)
+    revived=$(wait_for_ready_host "$stuck" 60)
     if [ "$revived" = "-1" ]; then
         echo "  $stuck did NOT revive within 60s of the unrelated advertisement"
     else
-        repro "EXP3: $stuck came back (${revived}s) purely because an unrelated service was advertised - no change to $stuck itself. This is the reported 'adding another service fixes the previous one' behaviour and confirms a stale Control Plane view."
+        repro "EXP3: $stuck came back (${revived}s) purely because an unrelated service was advertised - nothing about $stuck itself changed. This is the reported 'adding another service fixes the previous one' behaviour and confirms a stale Control Plane view."
     fi
     diag "EXP3 after revival probe"
 fi
@@ -491,6 +607,8 @@ fi
 # ==============================================================================
 
 log "VERDICT"
+echo ""
+echo "  measurement validity (does /devices drop a drained host?): $metric_valid"
 echo ""
 if [ "$repro_hits" -gt 0 ]; then
     echo "  ############################################"
@@ -502,6 +620,12 @@ if [ "$repro_hits" -gt 0 ]; then
     exit 1
 fi
 
-echo "  NOT REPRODUCED - every service kept at least one host through all flaps"
+if [ "$metric_valid" != "yes" ]; then
+    echo "  INCONCLUSIVE - the Control Plane signal could not be validated, so"
+    echo "  'no findings' does not mean the bug is absent."
+    exit 2
+fi
+
+echo "  NOT REPRODUCED - every service kept a ready host through every flap"
 [ "$harness_errors" -gt 0 ] && { echo "  WARNING: $harness_errors harness error(s); the run may not be conclusive"; exit 2; }
 exit 0
