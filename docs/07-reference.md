@@ -106,10 +106,12 @@ During each reconciliation, for every Service definition in the tailnet DockTail
 
 1. Keeps the Service if DockTail currently advertises it (it is backed by a running container).
 2. Keeps the Service if its name is listed in `IGNORE_SERVICE_NAMES`.
-3. Asks the Control Plane which hosts advertise the Service. If **at least one** host advertises it, DockTail keeps it.
-4. Deletes the Service only when **no** host advertises it.
+3. Asks the Control Plane which hosts are registered for the Service. If **at least one** host is registered, DockTail keeps it.
+4. Deletes the Service only when **no** host is registered for it.
 
-Because the decision is based on the tailnet-wide advertiser count, this is safe to enable on multiple DockTail instances at once: a Service advertised by any other host or instance always reports at least one host and is never deleted. DockTail also skips deletion whenever an API call fails, so it never deletes under uncertainty.
+Because the decision is based on the tailnet-wide host list, this is safe to enable on multiple DockTail instances at once: a Service hosted by any other host or instance always reports at least one host and is never deleted. DockTail also skips deletion whenever an API call fails, so it never deletes under uncertainty.
+
+> **Note:** That host list is a configuration and approval registry, not a liveness signal. A host stays listed while it is configured to host the Service, and remains listed for some time after it stops advertising it. Cleanup can therefore lag behind reality — it may keep a definition longer than expected, but it will not delete one that is still in use.
 
 This cleanup runs only during reconciliation, not during shutdown, so restarting DockTail does not delete and recreate the Services of still-running containers.
 
