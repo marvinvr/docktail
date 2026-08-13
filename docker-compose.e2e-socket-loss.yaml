@@ -1,0 +1,47 @@
+# Harness for the issue #72 root cause: a tailscaled socket directory that is
+# replaced on the host while DockTail has it bind-mounted.
+#
+# The socket is shared through a HOST PATH rather than a named volume, because
+# that is what makes the bug possible. A named volume keeps one directory inode
+# for the lifetime of the volume, so a daemon restart is invisible to the mount;
+# a host path can be deleted and recreated underneath a running container, which
+# is exactly what systemd does to /run/tailscale (RuntimeDirectory=tailscale,
+# RuntimeDirectoryPreserve=no) every time tailscaled restarts.
+#
+# tailscaled is started directly instead of through the image's containerboot:
+# the test only needs a real LocalAPI socket, and starting the daemon unauthed in
+# userspace mode keeps the harness hermetic (no tailnet, no authkey, no TUN, no
+# NET_ADMIN).
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: e2e-sl-tailscale
+    entrypoint:
+      - /usr/local/bin/tailscaled
+      - --tun=userspace-networking
+      - --socket=/var/run/tailscale/tailscaled.sock
+      - --state=mem:
+    volumes:
+      - ./.e2e-socket:/var/run/tailscale
+    restart: "no"
+
+  docktail:
+    build: .
+    container_name: e2e-sl-docktail
+    depends_on:
+      - tailscale
+    # The fix depends on a restart policy: DockTail exits so that Docker
+    # re-creates the container, which is the only thing that re-resolves the
+    # bind mount. This mirrors the documented deployment.
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./.e2e-socket:/var/run/tailscale
+    environment:
+      - LOG_LEVEL=debug
+      # Shortened so the test does not have to wait out the 90s default.
+      - SOCKET_LOSS_GRACE_PERIOD=20s
+      - RECONCILE_INTERVAL=5s
+      # No credentials: this scenario never touches the tailnet.
+      - SKIP_SHUTDOWN_CLEANUP=true

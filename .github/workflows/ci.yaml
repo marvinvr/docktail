@@ -68,6 +68,19 @@ jobs:
       - name: Build Docker image
         run: docker build .
 
+  # Regression test for issue #72: a replaced tailscaled socket directory leaves
+  # DockTail's bind mount stale forever. Needs no tailnet credentials, so unlike
+  # the main e2e job it runs on every PR and takes no share of the e2e tailnet.
+  e2e-socket-loss:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run socket-loss recovery test
+        run: ./e2e-socket-loss.sh
+
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15
