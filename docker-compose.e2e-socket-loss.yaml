@@ -43,6 +43,7 @@ services:
       - LOG_LEVEL=debug
       # Shortened so the test does not have to wait out the 90s default.
       - SOCKET_LOSS_GRACE_PERIOD=20s
+      - EXIT_ON_SOCKET_LOSS=false  # TEMP: prove the test goes red without the fix
       - RECONCILE_INTERVAL=5s
       # No credentials: this scenario never touches the tailnet.
       - SKIP_SHUTDOWN_CLEANUP=true
