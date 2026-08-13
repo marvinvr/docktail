@@ -18,10 +18,11 @@ services:
     image: tailscale/tailscale:latest
     container_name: e2e-sl-tailscale
     entrypoint:
-      - /usr/local/bin/tailscaled
-      - --tun=userspace-networking
-      - --socket=/var/run/tailscale/tailscaled.sock
-      - --state=mem:
+      - "/usr/local/bin/tailscaled"
+      - "--tun=userspace-networking"
+      - "--socket=/var/run/tailscale/tailscaled.sock"
+      # Quoted: the trailing colon would otherwise parse as a YAML mapping key.
+      - "--state=mem:"
     volumes:
       - ./.e2e-socket:/var/run/tailscale
     restart: "no"
