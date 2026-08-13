@@ -152,11 +152,12 @@ if ! wait_for 60 "DockTail to see the socket" container_sees_socket; then
 fi
 pass "DockTail can reach the tailscaled socket"
 
-if ! wait_for 60 "the watchdog to arm" docktail_logged "Tailscale socket watchdog armed"; then
+if wait_for 60 "the watchdog to arm" docktail_logged "Tailscale socket watchdog armed"; then
+	pass "socket watchdog armed"
+else
 	fail "the watchdog never armed; a lost socket would go undetected"
 	dump_diagnostics
 fi
-pass "socket watchdog armed"
 
 BASELINE_RESTARTS=$(restart_count)
 BASELINE_STARTED=$(started_at)
