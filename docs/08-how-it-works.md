@@ -36,6 +36,6 @@ Tailnet clients access container services
 
 Direct mode is the default. DockTail reaches containers through their Docker network IPs, so application containers do not need published host ports.
 
-When `docktail.service.direct=false`, DockTail uses Docker published port bindings instead. In that mode, the target port must be published to the host. This is also the reliable path when host `tailscaled` cannot reach container IPs, which is common with [rootless Docker](#rootless-docker).
+When `docktail.service.direct=false`, DockTail uses Docker published port bindings instead. In that mode, the target port must be published to the host. This is also the reliable path when host `tailscaled` cannot reach container IPs, which is common with [rootless Docker](02-installation.md#rootless-docker).
 
 Containers using `network_mode: host` are served on `127.0.0.1` (IPv4, to avoid dual-stack `localhost`→`::1` refusals). The local health check probes them from wherever the agent runs: directly via `127.0.0.1` when the agent shares the host's network namespace, or via the agent's docker-network gateway (the host's bridge address) when the agent runs in its own container. Containers using `network_mode: none` cannot use direct mode.

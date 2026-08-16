@@ -36,4 +36,4 @@ Then open the service from your tailnet:
 curl http://myapp.your-tailnet.ts.net
 ```
 
-This assumes a Linux Docker host that is already connected to Tailscale and allowed to advertise services. If it is not, continue with [Installation](#installation) and [Tailscale Admin Setup](#tailscale-admin-setup). On macOS and Windows the host's Tailscale daemon cannot be shared with containers, so use the [Tailscale Sidecar](#tailscale-sidecar) setup instead. Rootless Docker on Linux needs an extra operator step; see [Rootless Docker](#rootless-docker).
+This assumes a Linux Docker host that is already connected to Tailscale and allowed to advertise services. If it is not, continue with [Installation](02-installation.md#installation) and [Tailscale Admin Setup](03-tailscale-admin.md#tailscale-admin-setup). On macOS and Windows the host's Tailscale daemon cannot be shared with containers, so use the [Tailscale Sidecar](02-installation.md#tailscale-sidecar) setup instead. Rootless Docker on Linux needs an extra operator step; see [Rootless Docker](02-installation.md#rootless-docker).

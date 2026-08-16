@@ -16,7 +16,7 @@ services:
       - "docktail.service.port=80"
 ```
 
-Set `docktail.service.direct=false` to use published host ports instead. Use this for legacy setups, or when host `tailscaled` cannot reach container IPs (common with [rootless Docker](#rootless-docker)).
+Set `docktail.service.direct=false` to use published host ports instead. Use this for legacy setups, or when host `tailscaled` cannot reach container IPs (common with [rootless Docker](02-installation.md#rootless-docker)).
 
 ### Service Labels
 
