@@ -119,6 +119,46 @@ services:
       - "docktail.service.service-protocol=tcp"
       - "docktail.service.proxy-protocol=2"
 
+  # HTTP + proxy-protocol must be rejected (service is not advertised)
+  test-proxy-protocol-http:
+    image: nginx:alpine
+    container_name: e2e-proxy-protocol-http
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-proxy-protocol-http"
+      - "docktail.service.port=80"
+      - "docktail.service.proxy-protocol=2"
+
+  # Indexed TCP service carries its own proxy-protocol independently
+  test-proxy-protocol-indexed:
+    image: nginx:alpine
+    container_name: e2e-proxy-protocol-indexed
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-proxy-protocol-web"
+      - "docktail.service.port=80"
+      - "docktail.service.1.name=e2e-proxy-protocol-idx"
+      - "docktail.service.1.port=80"
+      - "docktail.service.1.protocol=tcp"
+      - "docktail.service.1.service-port=9000"
+      - "docktail.service.1.service-protocol=tcp"
+      - "docktail.service.1.proxy-protocol=2"
+
+  # Starts without PROXY protocol; later recreated with the label (issue #77)
+  test-proxy-protocol-change:
+    image: nginx:alpine
+    container_name: e2e-proxy-protocol-change
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-proxy-protocol-change"
+      - "docktail.service.port=80"
+      - "docktail.service.protocol=tcp"
+      - "docktail.service.service-port=9001"
+      - "docktail.service.service-protocol=tcp"
+
   # ============================================================================
   # 2. Smart Defaults
   # ============================================================================
