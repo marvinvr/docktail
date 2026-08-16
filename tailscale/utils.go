@@ -169,3 +169,14 @@ func buildDestination(svc *apptypes.ContainerService) string {
 	// The protocol flag and destination protocol should match the service configuration
 	return fmt.Sprintf("%s://%s:%s", svc.Protocol, svc.IPAddress, svc.TargetPort)
 }
+
+// serviceConfigChanged reports whether the advertised endpoint differs from the
+// desired container labels. Destination, Tailscale-facing protocol, and PROXY
+// protocol version are all compared so enabling, changing, or removing
+// --proxy-protocol is picked up on the next reconcile.
+func serviceConfigChanged(current ServiceEndpoint, desired *apptypes.ContainerService) bool {
+	expectedDest := buildDestination(desired)
+	return !sameDestination(current.Destination, expectedDest) ||
+		current.Protocol != desired.ServiceProtocol ||
+		current.ProxyProtocol != desired.ProxyProtocol
+}

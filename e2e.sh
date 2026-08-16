@@ -242,6 +242,26 @@ assert_service_protocol() {
     fi
 }
 
+# Check PROXY protocol version on the TCP handler (0 / omitted means unset).
+assert_service_proxy_protocol() {
+    local name="svc:$1"
+    local expected="$2"
+    local port
+    port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
+    if [ -z "$port" ]; then
+        fail "$name proxy-protocol check: no TCP config found"
+        return
+    fi
+
+    local actual
+    actual=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].ProxyProtocol // 0" 2>/dev/null || echo "0")
+    if [ "$actual" = "$expected" ]; then
+        pass "$name PROXY protocol is $expected"
+    else
+        fail "$name expected PROXY protocol $expected, got $actual"
+    fi
+}
+
 # Check that the destination proxy URL contains a substring
 assert_service_destination_contains() {
     local name="svc:$1"
@@ -505,6 +525,13 @@ assert_service_exists       "e2e-proto-tls-terminated-tcp"
 assert_service_port         "e2e-proto-tls-terminated-tcp" "6697"
 assert_service_protocol     "e2e-proto-tls-terminated-tcp" "tls-terminated-tcp"
 
+echo "  --- TCP with PROXY protocol v2 ---"
+assert_service_exists       "e2e-proxy-protocol"
+assert_service_port         "e2e-proxy-protocol" "8443"
+assert_service_protocol     "e2e-proxy-protocol" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol" "2"
+assert_service_proxy_protocol "e2e-proto-tcp" "0"
+
 # ==============================================================================
 # 2. Smart Defaults
 # ==============================================================================
@@ -715,6 +742,7 @@ assert_service_exists       "e2e-proto-http"
 assert_service_exists       "e2e-proto-https"
 assert_service_exists       "e2e-proto-tcp"
 assert_service_exists       "e2e-proto-tls-terminated-tcp"
+assert_service_exists       "e2e-proxy-protocol"
 assert_service_exists       "e2e-default-minimal"
 assert_service_exists       "e2e-net-custom"
 assert_service_exists       "e2e-multiport"
@@ -736,7 +764,9 @@ assert_service_not_exists   "e2e-manual-protected"  # cleaned up explicitly
 # A correctly reconciling TCP service is flagged as "changed" zero times once it
 # has been established. We measure the number of "Service configuration changed"
 # log lines for the TCP service over several reconciliation cycles; with the bug
-# present the count grows by one per cycle, with the fix it stays flat.
+# present the count grows by one per cycle, with the fix it stays flat. The
+# PROXY-protocol service is included so a missing ProxyProtocol field in serve
+# status cannot flap the endpoint every cycle (issue #77).
 
 log "12. TCP Reconciliation Stability (issue #56)"
 
@@ -753,15 +783,21 @@ assert_service_exists       "e2e-proto-tcp"
 assert_service_protocol     "e2e-proto-tcp" "tcp"
 assert_service_exists       "e2e-proto-tls-terminated-tcp"
 assert_service_protocol     "e2e-proto-tls-terminated-tcp" "tls-terminated-tcp"
+assert_service_exists       "e2e-proxy-protocol"
+assert_service_protocol     "e2e-proxy-protocol" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol" "2"
 
 echo "  Measuring TCP reconciliation stability across multiple cycles..."
 before_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tcp:5432")
 before_tls_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tls-terminated-tcp:6697")
+before_proxy_changed=$(count_service_changed "key=svc:e2e-proxy-protocol:8443")
 sleep 16   # >= 3 reconcile cycles at RECONCILE_INTERVAL=5s
 after_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tcp:5432")
 after_tls_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tls-terminated-tcp:6697")
+after_proxy_changed=$(count_service_changed "key=svc:e2e-proxy-protocol:8443")
 tcp_changed_delta=$((after_tcp_changed - before_tcp_changed))
 tls_tcp_changed_delta=$((after_tls_tcp_changed - before_tls_tcp_changed))
+proxy_changed_delta=$((after_proxy_changed - before_proxy_changed))
 
 if [ "$tcp_changed_delta" -le 0 ]; then
     pass "TCP service stable: not re-detected as changed across cycles (delta=$tcp_changed_delta)"
@@ -773,6 +809,12 @@ if [ "$tls_tcp_changed_delta" -le 0 ]; then
     pass "TLS-terminated TCP service stable: not re-detected as changed across cycles (delta=$tls_tcp_changed_delta)"
 else
     fail "TLS-terminated TCP service re-detected as changed $tls_tcp_changed_delta time(s) across reconcile cycles (issue #71)"
+fi
+
+if [ "$proxy_changed_delta" -le 0 ]; then
+    pass "PROXY-protocol TCP service stable: not re-detected as changed across cycles (delta=$proxy_changed_delta)"
+else
+    fail "PROXY-protocol TCP service re-detected as changed $proxy_changed_delta time(s) across reconcile cycles (issue #77: ProxyProtocol not parsed from serve status)"
 fi
 
 # ==============================================================================

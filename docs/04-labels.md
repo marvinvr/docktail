@@ -31,6 +31,7 @@ Set `docktail.service.direct=false` to use published host ports instead. This is
 | `docktail.service.protocol` | No | Smart | Backend protocol. |
 | `docktail.service.service-port` | No | Smart | Port Tailscale listens on. |
 | `docktail.service.service-protocol` | No | Smart | Tailscale-facing protocol. |
+| `docktail.service.proxy-protocol` | No | off | PROXY protocol version (`1` or `2`) prepended on TCP forwards so the backend sees the tailnet client address. Only valid with `service-protocol` `tcp` or `tls-terminated-tcp`. |
 | `docktail.tags` | No | `tag:container` | Comma-separated service tags. Labels are the source of truth; see the note below. |
 
 Tags are synced to the tailnet Service definition through the Tailscale API and require API credentials. Labels are authoritative: DockTail reconciles tags on every cycle, so tags edited by hand in the Tailscale admin console are reverted to the label-declared set on the next reconcile. Containers without a `docktail.tags` label use `DEFAULT_SERVICE_TAGS`.
@@ -40,6 +41,7 @@ Smart defaults:
 - `docktail.service.protocol` defaults to `https` when the backend port is `443`; otherwise it defaults to `http`.
 - `docktail.service.service-port` defaults to `443` when `service-protocol` is `https`; otherwise it defaults to `80`.
 - `docktail.service.service-protocol` defaults to `https` when the service port is `443`, to `tcp` when the backend protocol is TCP, and otherwise to `http`.
+- `docktail.service.proxy-protocol` is opt-in and off by default. The backend must understand PROXY protocol; sending the header to something that does not (Postgres, Redis, raw TCP apps) will break the connection. Set it to `2` unless you specifically need version `1`. The label is rejected on HTTP/HTTPS services because Tailscale only supports PROXY protocol for TCP forwarding.
 
 ### Multiple Services From One Container
 
@@ -57,7 +59,7 @@ services:
       - "docktail.service.1.port=8001"
 ```
 
-Each indexed service requires its own `name` and `port`. Per-index overridable labels are `name`, `port`, `service-port`, `protocol`, `service-protocol`, and `description`. Tags and network settings are inherited from the primary service config.
+Each indexed service requires its own `name` and `port`. Per-index overridable labels are `name`, `port`, `service-port`, `protocol`, `service-protocol`, `proxy-protocol`, and `description`. Tags and network settings are inherited from the primary service config.
 
 ### Funnel Labels
 

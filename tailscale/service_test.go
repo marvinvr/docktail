@@ -118,6 +118,35 @@ func TestTailscaleStatusParsing(t *testing.T) {
 				if tcpCfg.TCPForward != "172.17.0.5:5432" {
 					t.Errorf("expected TCPForward 172.17.0.5:5432, got %q", tcpCfg.TCPForward)
 				}
+				if tcpCfg.ProxyProtocol != 0 {
+					t.Errorf("expected ProxyProtocol 0 when omitted, got %d", tcpCfg.ProxyProtocol)
+				}
+			},
+		},
+		{
+			name: "TCP service with PROXY protocol v2",
+			input: `{
+				"Services": {
+					"svc:traefik": {
+						"TCP": {
+							"443": {
+								"TCPForward": "172.17.0.8:443",
+								"ProxyProtocol": 2
+							}
+						},
+						"Web": {}
+					}
+				}
+			}`,
+			expectedServices: 1,
+			checkFunc: func(t *testing.T, status TailscaleStatus) {
+				tcpCfg := status.Services["svc:traefik"].TCP["443"]
+				if tcpCfg.ProxyProtocol != 2 {
+					t.Errorf("expected ProxyProtocol 2, got %d", tcpCfg.ProxyProtocol)
+				}
+				if tcpCfg.TCPForward != "172.17.0.8:443" {
+					t.Errorf("expected TCPForward 172.17.0.8:443, got %q", tcpCfg.TCPForward)
+				}
 			},
 		},
 		{
@@ -221,6 +250,15 @@ func TestParseManagedServicesDestinations(t *testing.T) {
 				},
 				Web: map[string]TailscaleWebConfig{},
 			},
+			"svc:traefik": {
+				TCP: map[string]TailscaleTCPConfig{
+					"443": {
+						TCPForward:    "172.17.0.8:443",
+						ProxyProtocol: 2,
+					},
+				},
+				Web: map[string]TailscaleWebConfig{},
+			},
 			"manual-service": {
 				// Not managed by DockTail (no svc: prefix) -> ignored.
 				TCP: map[string]TailscaleTCPConfig{
@@ -268,6 +306,151 @@ func TestParseManagedServicesDestinations(t *testing.T) {
 	}
 	if irc.Destination != "172.17.0.4:6667" {
 		t.Errorf("svc:irc destination = %q, want 172.17.0.4:6667", irc.Destination)
+	}
+	if irc.ProxyProtocol != 0 {
+		t.Errorf("svc:irc proxy protocol = %d, want 0", irc.ProxyProtocol)
+	}
+
+	traefik, ok := got["svc:traefik:443"]
+	if !ok {
+		t.Fatal("expected svc:traefik:443 endpoint")
+	}
+	if traefik.Protocol != "tcp" {
+		t.Errorf("svc:traefik protocol = %q, want tcp", traefik.Protocol)
+	}
+	if traefik.Destination != "172.17.0.8:443" {
+		t.Errorf("svc:traefik destination = %q, want 172.17.0.8:443", traefik.Destination)
+	}
+	if traefik.ProxyProtocol != 2 {
+		t.Errorf("svc:traefik proxy protocol = %d, want 2", traefik.ProxyProtocol)
+	}
+}
+
+func TestServeAddArgs(t *testing.T) {
+	base := apptypes.ContainerService{
+		ServiceName:     "db",
+		Port:            "5432",
+		Protocol:        "tcp",
+		ServiceProtocol: "tcp",
+		IPAddress:       "172.17.0.5",
+		TargetPort:      "5432",
+	}
+
+	tests := []struct {
+		name    string
+		mutate  func(*apptypes.ContainerService)
+		want    []string
+		wantErr bool
+	}{
+		{
+			name: "tcp without proxy protocol",
+			want: []string{"serve", "--service=svc:db", "--tcp=5432", "tcp://172.17.0.5:5432"},
+		},
+		{
+			name: "tcp with proxy protocol 2",
+			mutate: func(svc *apptypes.ContainerService) {
+				svc.ProxyProtocol = 2
+			},
+			want: []string{"serve", "--service=svc:db", "--tcp=5432", "--proxy-protocol=2", "tcp://172.17.0.5:5432"},
+		},
+		{
+			name: "tls-terminated-tcp with proxy protocol 1",
+			mutate: func(svc *apptypes.ContainerService) {
+				svc.ServiceProtocol = "tls-terminated-tcp"
+				svc.ProxyProtocol = 1
+			},
+			want: []string{"serve", "--service=svc:db", "--tls-terminated-tcp=5432", "--proxy-protocol=1", "tcp://172.17.0.5:5432"},
+		},
+		{
+			name: "https never emits proxy protocol when unset",
+			mutate: func(svc *apptypes.ContainerService) {
+				svc.ServiceName = "api"
+				svc.Port = "443"
+				svc.Protocol = "http"
+				svc.ServiceProtocol = "https"
+				svc.TargetPort = "3000"
+			},
+			want: []string{"serve", "--service=svc:api", "--https=443", "http://172.17.0.5:3000"},
+		},
+		{
+			name: "unsupported protocol",
+			mutate: func(svc *apptypes.ContainerService) {
+				svc.ServiceProtocol = "udp"
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := base
+			if tt.mutate != nil {
+				tt.mutate(&svc)
+			}
+			got, err := serveAddArgs(&svc)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("serveAddArgs() = %#v, want %#v", got, tt.want)
+			}
+			for i := range tt.want {
+				if got[i] != tt.want[i] {
+					t.Fatalf("serveAddArgs() = %#v, want %#v", got, tt.want)
+				}
+			}
+		})
+	}
+}
+
+func TestServiceConfigChanged(t *testing.T) {
+	desired := &apptypes.ContainerService{
+		ServiceName:     "db",
+		Port:            "5432",
+		Protocol:        "tcp",
+		ServiceProtocol: "tcp",
+		IPAddress:       "172.17.0.5",
+		TargetPort:      "5432",
+		ProxyProtocol:   2,
+	}
+	current := ServiceEndpoint{
+		ServiceName:   "svc:db",
+		Port:          "5432",
+		Protocol:      "tcp",
+		Destination:   "172.17.0.5:5432",
+		ProxyProtocol: 2,
+	}
+
+	if serviceConfigChanged(current, desired) {
+		t.Fatal("matching proxy-protocol config should not look changed")
+	}
+
+	current.ProxyProtocol = 0
+	if !serviceConfigChanged(current, desired) {
+		t.Fatal("enabling proxy-protocol should be detected as a change")
+	}
+
+	current.ProxyProtocol = 1
+	if !serviceConfigChanged(current, desired) {
+		t.Fatal("changing proxy-protocol version should be detected as a change")
+	}
+
+	desired.ProxyProtocol = 0
+	current.ProxyProtocol = 2
+	if !serviceConfigChanged(current, desired) {
+		t.Fatal("removing proxy-protocol should be detected as a change")
+	}
+
+	desired.ProxyProtocol = 0
+	current.ProxyProtocol = 0
+	if serviceConfigChanged(current, desired) {
+		t.Fatal("matching config without proxy-protocol should not look changed")
 	}
 }
 

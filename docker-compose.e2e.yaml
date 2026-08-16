@@ -105,6 +105,20 @@ services:
       - "docktail.service.service-port=6697"
       - "docktail.service.service-protocol=tls-terminated-tcp"
 
+  # TCP service with PROXY protocol v2 (issue #77)
+  test-proxy-protocol:
+    image: nginx:alpine
+    container_name: e2e-proxy-protocol
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-proxy-protocol"
+      - "docktail.service.port=80"
+      - "docktail.service.protocol=tcp"
+      - "docktail.service.service-port=8443"
+      - "docktail.service.service-protocol=tcp"
+      - "docktail.service.proxy-protocol=2"
+
   # ============================================================================
   # 2. Smart Defaults
   # ============================================================================

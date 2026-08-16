@@ -37,6 +37,7 @@ DockTail uses native Tailscale Services, not per-container Tailscale devices.
 - Automatic Docker container discovery through labels.
 - Automatic Tailscale service creation with OAuth or API key credentials.
 - HTTP, HTTPS, TCP, and TLS-terminated TCP support.
+- Optional PROXY protocol on TCP services so backends see the tailnet client IP.
 - Tailscale HTTPS with automatic certificates.
 - Tailscale Funnel for public internet access.
 - Multiple Tailscale services from one container.
@@ -99,6 +100,18 @@ labels:
   - "docktail.service.port=5432"
   - "docktail.service.protocol=tcp"
   - "docktail.service.service-port=5432"
+```
+
+Preserve the tailnet client IP on a TCP reverse proxy:
+
+```yaml
+labels:
+  - "docktail.service.enable=true"
+  - "docktail.service.name=traefik"
+  - "docktail.service.port=443"
+  - "docktail.service.protocol=tcp"
+  - "docktail.service.service-port=443"
+  - "docktail.service.proxy-protocol=2"
 ```
 
 Expose a service publicly with Tailscale Funnel:

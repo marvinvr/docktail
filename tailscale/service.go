@@ -74,10 +74,11 @@ func parseManagedServices(status TailscaleStatus) map[string]ServiceEndpoint {
 			key := fmt.Sprintf("%s:%s", serviceName, port)
 
 			services[key] = ServiceEndpoint{
-				ServiceName: serviceName,
-				Port:        port,
-				Protocol:    protocol,
-				Destination: destination,
+				ServiceName:   serviceName,
+				Port:          port,
+				Protocol:      protocol,
+				Destination:   destination,
+				ProxyProtocol: tcpConfig.ProxyProtocol,
 			}
 
 			log.Debug().
@@ -132,14 +133,13 @@ func serviceDestination(svcConfig TailscaleService, port string, tcpConfig Tails
 	return ""
 }
 
-// addService adds a single service using Tailscale CLI
-// NOTE: This does NOT drain by default - draining only happens when needed
-// If adding fails due to config conflict, it clears (with drain) and retries
-func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService) error {
+// serveAddArgs builds `tailscale serve` arguments for advertising one service.
+// --proxy-protocol is included only when the label requested a version; Tailscale
+// rejects that flag on HTTP/HTTPS, so callers must already have validated it.
+func serveAddArgs(svc *apptypes.ContainerService) ([]string, error) {
 	serviceName := fmt.Sprintf("svc:%s", svc.ServiceName)
 	destination := buildDestination(svc)
 
-	// Map service protocol to CLI flag (this is what Tailscale exposes)
 	var protocolFlag string
 	switch svc.ServiceProtocol {
 	case "http":
@@ -151,14 +151,33 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 	case "tls-terminated-tcp":
 		protocolFlag = "--tls-terminated-tcp"
 	default:
-		return fmt.Errorf("unsupported service protocol: %s", svc.ServiceProtocol)
+		return nil, fmt.Errorf("unsupported service protocol: %s", svc.ServiceProtocol)
 	}
 
-	// Build the command: tailscale serve --service=svc:<name> --<protocol>=<port> <destination>
-	portArg := fmt.Sprintf("%s=%s", protocolFlag, svc.Port)
-	serviceArg := fmt.Sprintf("--service=%s", serviceName)
+	args := []string{
+		"serve",
+		fmt.Sprintf("--service=%s", serviceName),
+		fmt.Sprintf("%s=%s", protocolFlag, svc.Port),
+	}
+	if svc.ProxyProtocol != 0 {
+		args = append(args, fmt.Sprintf("--proxy-protocol=%d", svc.ProxyProtocol))
+	}
+	args = append(args, destination)
+	return args, nil
+}
 
-	cmd := c.tailscaleCmd(ctx, "serve", serviceArg, portArg, destination)
+// addService adds a single service using Tailscale CLI
+// NOTE: This does NOT drain by default - draining only happens when needed
+// If adding fails due to config conflict, it clears (with drain) and retries
+func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService) error {
+	args, err := serveAddArgs(svc)
+	if err != nil {
+		return err
+	}
+	serviceName := fmt.Sprintf("svc:%s", svc.ServiceName)
+	destination := buildDestination(svc)
+
+	cmd := c.tailscaleCmd(ctx, args...)
 
 	log.Debug().
 		Str("command", cmd.String()).
@@ -166,6 +185,7 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 		Str("service_protocol", svc.ServiceProtocol).
 		Str("service_port", svc.Port).
 		Str("backend_protocol", svc.Protocol).
+		Int("proxy_protocol", svc.ProxyProtocol).
 		Str("destination", destination).
 		Msg("Executing tailscale serve command")
 
@@ -190,7 +210,7 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 				Str("service", serviceName).
 				Msg("Retrying add after clearing conflicting config")
 
-			retryCmd := c.tailscaleCmd(ctx, "serve", serviceArg, portArg, destination)
+			retryCmd := c.tailscaleCmd(ctx, args...)
 			retryOutput, retryErr := retryCmd.CombinedOutput()
 			if retryErr != nil {
 				return fmt.Errorf("failed to add service after clearing: %w\nOutput: %s", retryErr, string(retryOutput))

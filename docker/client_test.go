@@ -238,6 +238,95 @@ func TestResolveProtocols(t *testing.T) {
 	}
 }
 
+func TestParseProxyProtocol(t *testing.T) {
+	tests := []struct {
+		name            string
+		value           string
+		serviceProtocol string
+		want            int
+		wantError       bool
+	}{
+		{
+			name:            "unset on tcp",
+			value:           "",
+			serviceProtocol: "tcp",
+			want:            0,
+		},
+		{
+			name:            "unset on https",
+			value:           "",
+			serviceProtocol: "https",
+			want:            0,
+		},
+		{
+			name:            "version 1 on tcp",
+			value:           "1",
+			serviceProtocol: "tcp",
+			want:            1,
+		},
+		{
+			name:            "version 2 on tcp",
+			value:           "2",
+			serviceProtocol: "tcp",
+			want:            2,
+		},
+		{
+			name:            "version 2 on tls-terminated-tcp",
+			value:           "2",
+			serviceProtocol: "tls-terminated-tcp",
+			want:            2,
+		},
+		{
+			name:            "trims whitespace",
+			value:           " 2 ",
+			serviceProtocol: "tcp",
+			want:            2,
+		},
+		{
+			name:            "rejected on http",
+			value:           "2",
+			serviceProtocol: "http",
+			wantError:       true,
+		},
+		{
+			name:            "rejected on https",
+			value:           "1",
+			serviceProtocol: "https",
+			wantError:       true,
+		},
+		{
+			name:            "invalid version",
+			value:           "3",
+			serviceProtocol: "tcp",
+			wantError:       true,
+		},
+		{
+			name:            "non-numeric",
+			value:           "true",
+			serviceProtocol: "tcp",
+			wantError:       true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseProxyProtocol(tt.value, tt.serviceProtocol)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("parseProxyProtocol(%q, %q) = %d, want %d", tt.value, tt.serviceProtocol, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestManagedContainerDetection(t *testing.T) {
 	tests := []struct {
 		name        string

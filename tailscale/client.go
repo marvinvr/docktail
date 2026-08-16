@@ -123,10 +123,11 @@ func (t *apiKeyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // ServiceEndpoint represents a single endpoint for comparison
 type ServiceEndpoint struct {
-	ServiceName string // e.g., "svc:web"
-	Port        string // e.g., "443"
-	Protocol    string // e.g., "http", "https", "tcp"
-	Destination string // e.g., "http://localhost:9080"
+	ServiceName   string // e.g., "svc:web"
+	Port          string // e.g., "443"
+	Protocol      string // e.g., "http", "https", "tcp"
+	Destination   string // e.g., "http://localhost:9080"
+	ProxyProtocol int    // 0, 1, or 2 as reported by `tailscale serve status`
 }
 
 // TailscaleStatus represents the structure of 'tailscale serve status --json'
@@ -147,6 +148,9 @@ type TailscaleTCPConfig struct {
 	// and TLS-terminated-TCP endpoints. HTTP/HTTPS endpoints leave this empty
 	// and store their backend in the Web handler config instead.
 	TCPForward string `json:"TCPForward"`
+	// ProxyProtocol is the PROXY protocol version prepended on TCP forwards.
+	// Omitted (0) when Tailscale is not sending a PROXY header.
+	ProxyProtocol int `json:"ProxyProtocol"`
 }
 
 type TailscaleWebConfig struct {
@@ -210,16 +214,17 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 				Msg("Service not found in current state, will add")
 		} else {
 			// Service exists - check if configuration changed
-			expectedDest := buildDestination(desired)
-			if !sameDestination(current.Destination, expectedDest) || current.Protocol != desired.ServiceProtocol {
+			if serviceConfigChanged(current, desired) {
 				toAdd[key] = desired
 				log.Info().
 					Str("key", key).
 					Str("service", desired.ServiceName).
 					Str("current_dest", current.Destination).
-					Str("expected_dest", expectedDest).
+					Str("expected_dest", buildDestination(desired)).
 					Str("current_protocol", current.Protocol).
 					Str("expected_protocol", desired.ServiceProtocol).
+					Int("current_proxy_protocol", current.ProxyProtocol).
+					Int("expected_proxy_protocol", desired.ProxyProtocol).
 					Msg("Service configuration changed, will update")
 			} else {
 				// Service exists and matches - no action needed

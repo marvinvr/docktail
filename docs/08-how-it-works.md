@@ -38,4 +38,6 @@ Direct mode is the default. DockTail reaches containers through their Docker net
 
 When `docktail.service.direct=false`, DockTail uses Docker published port bindings instead. In that mode, the target port must be published to the host.
 
+TCP forwards hide the tailnet client address by default: the backend sees tailscaled. Set `docktail.service.proxy-protocol` to `1` or `2` so Tailscale prepends a PROXY protocol header. The backend must accept that header; HTTP/HTTPS services cannot use it.
+
 Containers using `network_mode: host` are served on `127.0.0.1` (IPv4, to avoid dual-stack `localhost`→`::1` refusals). The local health check probes them from wherever the agent runs: directly via `127.0.0.1` when the agent shares the host's network namespace, or via the agent's docker-network gateway (the host's bridge address) when the agent runs in its own container. Containers using `network_mode: none` cannot use direct mode.
