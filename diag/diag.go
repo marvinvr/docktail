@@ -41,13 +41,21 @@ type Config struct {
 	Heartbeat time.Duration
 }
 
+const (
+	defaultFile      = "/diagnostics/docktail-diagnostics.jsonl"
+	defaultInterval  = 10 * time.Second
+	defaultHeartbeat = 10 * time.Minute
+)
+
 // LoadConfig reads the recorder configuration from the environment.
 func LoadConfig() Config {
 	return Config{
-		Enabled:   envBool("DIAGNOSTICS", false),
-		File:      envString("DIAGNOSTICS_FILE", "/diagnostics/docktail-diagnostics.jsonl"),
-		Interval:  envDuration("DIAGNOSTICS_INTERVAL", 10*time.Second),
-		Heartbeat: envDuration("DIAGNOSTICS_HEARTBEAT", 10*time.Minute),
+		Enabled: envBool("DIAGNOSTICS", false),
+		// Looked up rather than read with a default, so that an explicitly empty
+		// DIAGNOSTICS_FILE selects log-only recording instead of the default path.
+		File:      envPath("DIAGNOSTICS_FILE", defaultFile),
+		Interval:  envDuration("DIAGNOSTICS_INTERVAL", defaultInterval),
+		Heartbeat: envDuration("DIAGNOSTICS_HEARTBEAT", defaultHeartbeat),
 	}
 }
 
@@ -88,6 +96,18 @@ type Recorder struct {
 // New creates a recorder and opens the output file when one is configured.
 // A file that cannot be opened is not fatal: recording degrades to log-only.
 func New(cfg Config, ts *tailscale.Client, version string) *Recorder {
+	// time.NewTicker panics on a non-positive interval, so a DIAGNOSTICS_INTERVAL
+	// of `0s` must never reach it. A diagnostics setting is not worth crashing
+	// DockTail over.
+	if cfg.Interval <= 0 {
+		log.Warn().Dur("interval", cfg.Interval).Dur("using", defaultInterval).
+			Msg("Diagnostics: sampling interval must be positive, falling back to the default")
+		cfg.Interval = defaultInterval
+	}
+	if cfg.Heartbeat < 0 {
+		cfg.Heartbeat = defaultHeartbeat
+	}
+
 	r := &Recorder{cfg: cfg, ts: ts, version: version, warned: make(map[string]bool)}
 
 	if cfg.File == "" {
@@ -130,7 +150,12 @@ func (r *Recorder) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			r.sample(ctx, "stop")
+			// The context that ended the loop is already cancelled, so reusing it
+			// here would fail every CLI call and turn the closing record into an
+			// error instead of the documented `stop`.
+			stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			r.sample(stopCtx, "stop")
+			cancel()
 			return
 		case <-ticker.C:
 			r.sample(ctx, "change")
@@ -271,8 +296,11 @@ func (r *Recorder) write(rec record) {
 	}
 }
 
-func envString(key, def string) string {
-	if v := os.Getenv(key); v != "" {
+// envPath differs from the other helpers in honouring an explicitly empty value:
+// `DIAGNOSTICS_FILE=` is how recording to the log only is requested, which is not
+// the same thing as leaving the variable unset.
+func envPath(key, def string) string {
+	if v, ok := os.LookupEnv(key); ok {
 		return v
 	}
 	return def

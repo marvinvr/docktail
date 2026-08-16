@@ -147,8 +147,20 @@ func ServiceStates(serveConfig map[string]ServiceEndpoint, advertised []string) 
 		advertisedSet[name] = struct{}{}
 	}
 
+	// Walk the serve config in a fixed order. A service with several ports can
+	// have a different backend per port, and the representative one picked below
+	// would otherwise depend on Go's map iteration order — which would make the
+	// recorded state differ between two samples of an unchanged node, and the
+	// recorder writes a record every time the state differs.
+	keys := make([]string, 0, len(serveConfig))
+	for key := range serveConfig {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
 	byName := make(map[string]*ServiceState)
-	for _, endpoint := range serveConfig {
+	for _, key := range keys {
+		endpoint := serveConfig[key]
 		state, ok := byName[endpoint.ServiceName]
 		if !ok {
 			state = &ServiceState{Name: endpoint.ServiceName, Configured: true}
