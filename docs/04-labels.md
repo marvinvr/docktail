@@ -16,7 +16,7 @@ services:
       - "docktail.service.port=80"
 ```
 
-Set `docktail.service.direct=false` to use published host ports instead. This is mainly useful for legacy setups or unusual networking constraints.
+Set `docktail.service.direct=false` to use published host ports instead. Use this for legacy setups, or when host `tailscaled` cannot reach container IPs (common with [rootless Docker](#rootless-docker)).
 
 ### Service Labels
 
@@ -26,7 +26,7 @@ Set `docktail.service.direct=false` to use published host ports instead. This is
 | `docktail.service.name` | Yes | - | Service name, such as `web` or `api`. |
 | `docktail.service.port` | Yes | - | Backend container port to proxy to. |
 | `docktail.service.description` | No | - | Human-readable description shown for the service in the Tailscale admin panel. Requires API credentials (synced to the Service definition's `comment`). |
-| `docktail.service.direct` | No | `true` | Proxy directly to container IP instead of requiring a published host port. |
+| `docktail.service.direct` | No | `true` | Proxy directly to container IP instead of requiring a published host port. Set `false` when host `tailscaled` cannot reach container IPs (rootless Docker). |
 | `docktail.service.network` | No | `bridge` or first available | Docker network used for direct container IP detection. |
 | `docktail.service.protocol` | No | Smart | Backend protocol. |
 | `docktail.service.service-port` | No | Smart | Port Tailscale listens on. |

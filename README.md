@@ -74,7 +74,7 @@ docker compose up -d
 curl http://myapp.your-tailnet.ts.net
 ```
 
-This assumes the Docker host is connected to Tailscale and allowed to advertise services. See the full docs for host setup, sidecar setup, OAuth permissions, ACLs, labels, Funnel, and examples.
+This assumes the Docker host is connected to Tailscale and allowed to advertise services. See the full docs for host setup, sidecar setup, rootless Docker, OAuth permissions, ACLs, labels, Funnel, and examples.
 
 For Docker secrets or other mounted secret files, set `FILE__TAILSCALE_OAUTH_CLIENT_ID` / `FILE__TAILSCALE_OAUTH_CLIENT_SECRET` or `TAILSCALE_OAUTH_CLIENT_ID_FILE` / `TAILSCALE_OAUTH_CLIENT_SECRET_FILE` to the mounted file paths instead of putting the values directly in the environment.
 

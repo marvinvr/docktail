@@ -16,7 +16,7 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `SKIP_SHUTDOWN_CLEANUP` | `false` | When `true`, DockTail leaves its services and Funnels advertised on shutdown instead of draining and clearing them. This can keep ports exposed on the tailnet beyond what your current labels define; see [Cleanup Behavior](#cleanup-behavior). |
 | `LOG_LEVEL` | `info` | Logging level: `debug`, `info`, `warn`, or `error`. |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval. |
-| `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. |
+| `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. Rootless Docker typically uses `unix:///run/user/<uid>/docker.sock`. |
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Tailscale daemon socket. |
 
 If both OAuth and API key credentials are configured, DockTail uses OAuth.

@@ -3,6 +3,7 @@ package tailscale
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -193,6 +194,9 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 			retryCmd := c.tailscaleCmd(ctx, "serve", serviceArg, portArg, destination)
 			retryOutput, retryErr := retryCmd.CombinedOutput()
 			if retryErr != nil {
+				if isServeConfigDeniedError(string(retryOutput)) {
+					return errors.New(serveConfigDeniedMessage("add service after clearing"))
+				}
 				return fmt.Errorf("failed to add service after clearing: %w\nOutput: %s", retryErr, string(retryOutput))
 			}
 
@@ -215,6 +219,10 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 				"     \"autoApprovers\": { \"services\": { \"tag:container\": [\"tag:server\"] } }\n" +
 				"  3. Approve the service at https://login.tailscale.com/admin/services\n" +
 				"Full setup guide: https://github.com/marvinvr/docktail#tailscale-admin-setup")
+		}
+
+		if isServeConfigDeniedError(stderr) {
+			return errors.New(serveConfigDeniedMessage("add service"))
 		}
 
 		return fmt.Errorf("failed to add service: %w\nOutput: %s", err, stderr)

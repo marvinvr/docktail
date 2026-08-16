@@ -445,6 +445,9 @@ func (c *Client) addFunnel(ctx context.Context, svc *apptypes.ContainerService) 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		stderr := string(output)
+		if isServeConfigDeniedError(stderr) {
+			return errors.New(serveConfigDeniedMessage("enable funnel"))
+		}
 		if isFunnelACLError(stderr) {
 			return fmt.Errorf(
 				"failed to enable funnel: this node is not allowed by your Tailscale funnel policy.\n"+
