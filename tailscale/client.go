@@ -802,7 +802,7 @@ func (c *Client) deleteUnusedServiceDefinitions(ctx context.Context, desiredServ
 
 		log.Info().
 			Str("service", name).
-			Msg("Deleting unused service definition (no advertising hosts)")
+			Msg("Deleting unused service definition (no registered hosts)")
 
 		if err := c.deleteService(ctx, name); err != nil {
 			log.Error().

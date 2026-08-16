@@ -123,14 +123,30 @@ DockTail talks to `tailscaled` over a Unix socket that it bind-mounts from the
 host or shares with a sidecar. That mount is resolved once, when the container
 starts.
 
-This matters when `tailscaled` restarts. On a host install under systemd, the
+This matters whenever `tailscaled` restarts. On a host install under systemd, the
 unit declares `RuntimeDirectory=tailscale` and leaves `RuntimeDirectoryPreserve`
-at its default of `no`, so systemd **deletes `/run/tailscale` when the daemon
+at its default of `no`, so systemd **removes `/run/tailscale` when the daemon
 stops and creates a new directory when it starts**. A container that mounted the
 old directory stays attached to it after it is unlinked, and the new socket never
 becomes visible inside the container. Sharing the socket through a host path with
 a sidecar that gets recreated has the same effect. Retrying cannot help: the
 socket is not late, it is in a directory this container can no longer see.
+
+An upgrade is the most common trigger, because upgrading the package restarts the
+daemon — but it is not the only one. Measured on Debian 12 (systemd 252,
+tailscale 1.102.2), an ordinary `systemctl restart tailscaled` replaces the
+directory just as an upgrade does, and so does any stop/start pair:
+
+| | directory | DockTail's mount |
+| --- | --- | --- |
+| before | inode 264, socket present | inode 264, socket present |
+| after `systemctl restart tailscaled` | inode 412, socket present | inode 264, empty |
+| after the container restarts | inode 412, socket present | inode 412, socket present |
+
+Because of this, mounting the directory rather than the socket file — which is
+what the setup guide recommends, and which does survive the socket file being
+recreated — is not on its own enough to survive a daemon restart on a
+systemd host.
 
 Without intervention DockTail would keep running in that state — process alive,
 every Tailscale call failing, and every Service it manages drifting until it goes
@@ -200,9 +216,9 @@ heartbeat interval:
 Anomalies are also logged as warnings, once when they appear and once when they
 clear, so they are visible without reading the file.
 
-The file grows only when something changes, so it is safe to leave running for
-days. It contains service names, ports, backend container IPs and node IDs; it
-contains no credentials.
+The file grows on state changes and on the heartbeat, not on every sample, so it
+is safe to leave running for days. It contains service names, ports, backend
+container IPs and node IDs; it contains no credentials.
 
 ### Useful Links
 
