@@ -343,8 +343,8 @@ type TailnetPeer struct {
 // tailnet, API refused). Reason carries a ControlUnavail* code so the UI can
 // explain what to do instead of showing a false outage. Additive and
 // metadata-only — no exec surface — and ProtocolVersion stays 1. An agent that
-// does not advertise [CapTailnetControl] is never probed, so an old agent simply
-// yields no tailnet vantage.
+// does not advertise [CapTailnetControlAPI] is never probed, so an agent without
+// credentials simply yields no tailnet vantage.
 type TailnetControlReport struct {
 	RequestID string                `json:"request_id,omitempty"` // echoes TailnetProbe.RequestID
 	Tailnet   string                `json:"tailnet,omitempty"`    // tailnet this answer covers; scopes which hosts it may be applied to
@@ -463,7 +463,7 @@ type CheckConfig struct {
 // buggy or hostile control plane can never turn the customer's own credentials
 // into an API-rate-limit incident.
 //
-// Sent only to agents that advertised [CapTailnetControl] in their Hello. An
+// Sent only to agents that advertised [CapTailnetControlAPI] in their Hello. An
 // older agent ignores the unknown frame type; the cloud never sends it one.
 type TailnetProbe struct {
 	RequestID string                `json:"request_id"`
@@ -554,27 +554,51 @@ const (
 	ControlStateUnknown         = "unknown"             // could not be determined
 )
 
-// CapTailnetControl is the [Hello.Capabilities] entry an agent advertises when it
-// can answer a [TailnetProbe] — i.e. it understands the frame AND has Tailscale
-// API credentials configured. The cloud probes only agents that advertise it, so
-// an older agent is never sent an unknown frame and simply has no tailnet
-// vantage.
-const CapTailnetControl = "tailnet_control"
+// The [Hello.Capabilities] entries for the tailnet vantage. They are deliberately
+// TWO entries, because the cloud must tell three states apart and one flag
+// cannot:
+//
+//   - neither                 ⇒ the agent predates the tailnet vantage
+//     ([ControlUnavailAgentOutdated])
+//   - CapTailnetControl alone ⇒ a current agent with no Tailscale API
+//     credentials ([ControlUnavailNoCredentials])
+//   - both                    ⇒ the agent can be probed
+//
+// Collapsing them would make "no credentials" — the common case, and the one
+// with a two-line fix — indistinguishable from "your agent is too old", sending
+// the operator after a problem they do not have.
+const (
+	// CapTailnetControl means the agent understands the [TailnetProbe] frame.
+	// Advertised unconditionally by every agent that has this code, credentials
+	// or not, so it is a pure version marker.
+	CapTailnetControl = "tailnet_control"
+	// CapTailnetControlAPI means the agent ALSO holds Tailscale API credentials
+	// and can actually answer a probe. The cloud probes only agents advertising
+	// it, so an agent is never asked a question it cannot answer.
+	CapTailnetControlAPI = "tailnet_control_api"
+)
 
 // Reasons a [TailnetControlReport] carries Available=false. The cloud surfaces
 // these verbatim so the UI can tell the operator what to fix rather than showing
 // a phantom outage.
 const (
-	ControlUnavailNoCredentials = "no_credentials" // no OAuth client / API key configured on the agent
-	ControlUnavailNoTailnet     = "no_tailnet"     // the host is not on a tailnet
-	ControlUnavailUnauthorized  = "unauthorized"   // 401 — credentials rejected
-	ControlUnavailForbidden     = "forbidden"      // 403 — credentials lack the Services read scope
-	ControlUnavailRateLimited   = "rate_limited"   // 429 — backing off
-	ControlUnavailAPIError      = "api_error"      // anything else (network, 5xx, unparseable)
+	// ControlUnavailNoCredentials is the common case: a working agent with no
+	// Tailscale API credentials. Sent by an agent that lost its credentials after
+	// connecting, and synthesized by the cloud for a host advertising
+	// [CapTailnetControl] without [CapTailnetControlAPI] — which is how it is
+	// normally reached, since such a host is never probed.
+	ControlUnavailNoCredentials = "no_credentials"
+	ControlUnavailNoTailnet     = "no_tailnet"   // the host is not on a tailnet
+	ControlUnavailUnauthorized  = "unauthorized" // 401 — credentials rejected
+	ControlUnavailForbidden     = "forbidden"    // 403 — credentials lack the Services read scope
+	ControlUnavailRateLimited   = "rate_limited" // 429 — backing off
+	ControlUnavailAPIError      = "api_error"    // anything else (network, 5xx, unparseable)
 
-	// ControlUnavailUnsupported is synthesized BY THE CLOUD for a workspace whose
-	// hosts are all too old to answer a probe. It never appears on the wire.
-	ControlUnavailUnsupported = "unsupported"
+	// ControlUnavailAgentOutdated is synthesized BY THE CLOUD for a host whose
+	// agent predates the tailnet vantage (it advertises neither capability). It
+	// never appears on the wire: an agent able to send it would by definition be
+	// new enough not to need it.
+	ControlUnavailAgentOutdated = "agent_outdated"
 )
 
 // Caps for log capture (also enforced agent-side).

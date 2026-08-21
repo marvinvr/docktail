@@ -108,8 +108,11 @@ agent enforces its own minimum interval of 60 seconds between control-plane
 reads, re-serving its previous answer if asked sooner — your Tailscale API quota
 is yours, and nothing on the Cloud side can spend more of it than that.
 
-Without credentials the agent reports the tailnet vantage as unavailable with a
-reason, and Cloud says so instead of showing an outage. Local checks, Docker
+Without credentials the agent still says so explicitly: its hello advertises that
+it understands tailnet health but has no credentials for it, so Cloud reports "no
+Tailscale credentials" and links to [Tailscale Admin
+Setup](03-tailscale-admin.md#tailscale-admin-setup) rather than showing an outage —
+or telling you to upgrade an agent that is already current. Local checks, Docker
 events, metrics, and incidents are unaffected.
 
 ### Identity

@@ -961,11 +961,17 @@ func (c *Collector) sendHello(ctx context.Context, conn *wsConn) bool {
 	if c.hostTempCap {
 		caps = append(caps, "host_temp")
 	}
-	// Advertised only with Tailscale API credentials in hand: the cloud probes
-	// exactly one capable host per tailnet, so claiming it without being able to
-	// answer would cost that tailnet its vantage.
+	// Two entries, not one. CapTailnetControl says "this agent understands the
+	// tailnet_probe frame" and is unconditional — it is what lets the cloud tell a
+	// current agent with no Tailscale credentials apart from an agent too old to
+	// answer at all, so it can say "set TAILSCALE_OAUTH_CLIENT_ID" instead of
+	// "upgrade your agent". CapTailnetControlAPI says "and it has credentials", and
+	// is what the cloud actually gates probing on: it asks exactly one capable host
+	// per tailnet, so claiming it without being able to answer would cost that
+	// tailnet its vantage.
+	caps = append(caps, proto.CapTailnetControl)
 	if c.tailnet != nil && c.tailnet.APIEnabled() {
-		caps = append(caps, proto.CapTailnetControl)
+		caps = append(caps, proto.CapTailnetControlAPI)
 	}
 	nodeID, tailnet := c.tailnetIdentity(ctx)
 	hello := proto.Hello{
