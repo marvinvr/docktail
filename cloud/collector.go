@@ -41,7 +41,7 @@ type Collector struct {
 	docker  *docker.Client
 	log     zerolog.Logger
 	checker *checker
-	tailnet tailnetSource // local netmap reader (serve state + peer liveness); nil ⇒ no tailnet vantage
+	tailnet tailnetSource // local daemon + Tailscale control-plane reader; nil ⇒ no tailnet signals
 
 	fingerprint   string
 	hostname      string
@@ -58,6 +58,10 @@ type Collector struct {
 	cfgVer       int
 	unmonitored  bool      // cloud reports this host inactive/past the plan cap; throttle output
 	lastTeaser   time.Time // last throttled teaser snapshot sent while unmonitored
+
+	probeMu     sync.Mutex                 // serializes control-plane probes; guards probedAt + probeReport
+	probedAt    time.Time                  // last Tailscale control-plane read, for the agent-side minimum interval
+	probeReport proto.TailnetControlReport // last answer, re-served when the cloud asks again too soon
 
 	statsMu      sync.Mutex           // guards prevCPU + prevCPUOther
 	prevCPU      map[string]cpuSample // last CPU counters per service container, for % deltas
@@ -88,9 +92,10 @@ type containerStats struct {
 
 // NewCollector builds a Collector, reading the host fingerprint (docker engine
 // ID) and versions up front. Returns an error only if the engine ID can't be
-// read — without it there is no stable host identity. ts is the local tailscale
-// daemon reader used to source the tailnet vantage from the host's own netmap;
-// pass nil (or a client with no tailnet) to run without the tailnet vantage.
+// read — without it there is no stable host identity. ts reads the local
+// tailscale daemon (peer liveness, node identity) and, when API credentials are
+// configured, the Tailscale control plane behind the tailnet vantage; pass nil
+// to run without any tailnet signals.
 func NewCollector(ctx context.Context, cfg Config, dc *docker.Client, ts tailnetSource, logger zerolog.Logger) (*Collector, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, fmt.Errorf("cloud config: %w", err)
@@ -283,9 +288,9 @@ func (c *Collector) pruneStatsMap(present map[string]struct{}, prevCPU map[strin
 }
 
 // toService maps a reconciler ContainerService + docker enrichment onto the wire
-// Service. FQDN is left empty: the tailnet vantage is sourced from the host's own
-// `tailscale serve` config (see tailnet.go), keyed by service name + port, so the
-// cloud does not need the MagicDNS domain to classify serve state.
+// Service. FQDN is left empty: the tailnet vantage comes from the Tailscale
+// control plane keyed by service name (see tailnet.go), so the cloud does not
+// need the MagicDNS domain to classify it.
 func toService(cs *apptypes.ContainerService, info docker.CloudInfo, stats containerStats) proto.Service {
 	svc := proto.Service{
 		Key:            serviceKeyForContainerService(cs),
@@ -641,6 +646,9 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
 		return false
 	}
 
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+
 	ackCh := make(chan proto.HelloAck, 1)
 	h := handlers{
 		onHelloAck: func(ack proto.HelloAck) {
@@ -650,10 +658,12 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
 			}
 		},
 		onConfig: func(cfg proto.Config) { c.applyConfig(cfg) },
+		// Off the read loop: answering hits the Tailscale API, and a slow API
+		// must not stall the frames (and pongs) behind it.
+		onTailnetProbe: func(probe proto.TailnetProbe) {
+			go c.handleTailnetProbe(connCtx, conn, probe)
+		},
 	}
-
-	connCtx, connCancel := context.WithCancel(ctx)
-	defer connCancel()
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- conn.run(connCtx, h) }()
@@ -797,26 +807,18 @@ func (c *Collector) runChecks(ctx context.Context, conn *wsConn) {
 	if unmonitored || len(services) == 0 {
 		return
 	}
+	// Local vantage only. The tailnet vantage is not a probe the agent runs: it
+	// is the Tailscale control plane's answer, reported on request as a
+	// tailnet_control frame (see tailnet.go), so nothing here may claim it.
 	results := c.checker.run(ctx, services, configs)
-	// Tailnet-vantage results from the host's own `tailscale serve` config (the
-	// netmap-sourced vantage — no credentials). nil when there is no tailnet, so
-	// the cloud leaves the tailnet vantage not_configured.
-	tnResults := c.tailnetResults(ctx, services)
-	frame := results
-	if len(tnResults) > 0 {
-		frame = make([]proto.CheckResult, 0, len(results)+len(tnResults))
-		frame = append(frame, results...)
-		frame = append(frame, tnResults...)
-	}
-	if len(frame) == 0 {
+	if len(results) == 0 {
 		return
 	}
-	c.send(conn, proto.TypeCheckResults, proto.CheckResults{Results: frame})
-	c.log.Debug().Int("results", len(results)).Int("tailnet_results", len(tnResults)).Msg("cloud: check results sent")
+	c.send(conn, proto.TypeCheckResults, proto.CheckResults{Results: results})
+	c.log.Debug().Int("results", len(results)).Msg("cloud: check results sent")
 	// Capture logs for services that just crossed the down-debounce edge — the
 	// probe-driven counterpart to maybeCaptureLogs. Sent after check_results so
-	// the excerpt lands once the cloud has opened the incident. Local results
-	// only: a not-published tailnet result must not inflate the local fail streak.
+	// the excerpt lands once the cloud has opened the incident.
 	c.captureOnCheckFailures(ctx, conn, services, results)
 }
 
@@ -959,10 +961,18 @@ func (c *Collector) sendHello(ctx context.Context, conn *wsConn) bool {
 	if c.hostTempCap {
 		caps = append(caps, "host_temp")
 	}
+	// Advertised only with Tailscale API credentials in hand: the cloud probes
+	// exactly one capable host per tailnet, so claiming it without being able to
+	// answer would cost that tailnet its vantage.
+	if c.tailnet != nil && c.tailnet.APIEnabled() {
+		caps = append(caps, proto.CapTailnetControl)
+	}
+	nodeID, tailnet := c.tailnetIdentity(ctx)
 	hello := proto.Hello{
 		ProtocolVersion: proto.ProtocolVersion,
 		Fingerprint:     c.fingerprint,
-		TailscaleNodeID: c.tailnetSelfID(ctx),
+		TailscaleNodeID: nodeID,
+		Tailnet:         tailnet,
 		Hostname:        c.hostname,
 		AgentVersion:    agentVersion,
 		DockerVersion:   c.dockerVersion,

@@ -675,6 +675,9 @@ type serviceHost struct {
 
 // listServiceHosts returns the devices currently advertising the given Service.
 // An empty slice means no host is advertising it, i.e. the Service is unused.
+// A non-2xx response is returned as an *APIStatusError so callers can tell
+// "no such Service definition" (404) and credential/quota problems (401/403/429)
+// apart from a transport failure.
 func (c *Client) listServiceHosts(ctx context.Context, serviceName string) ([]serviceHost, error) {
 	apiURL := fmt.Sprintf("%s/api/v2/tailnet/%s/services/%s/devices", c.baseURL, url.PathEscape(c.tailnet), url.PathEscape(serviceName))
 
@@ -691,7 +694,7 @@ func (c *Client) listServiceHosts(ctx context.Context, serviceName string) ([]se
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("list service hosts API returned error status %d: %s", resp.StatusCode, string(body))
+		return nil, &APIStatusError{Op: "list service hosts", StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var result struct {

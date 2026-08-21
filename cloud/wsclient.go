@@ -27,10 +27,13 @@ const (
 	maxBackoff = 60 * time.Second
 )
 
-// handlers receive cloud->agent frames decoded by the read loop.
+// handlers receive cloud->agent frames decoded by the read loop. A handler runs
+// ON the read loop, so anything that blocks (network I/O) must hand off to a
+// goroutine.
 type handlers struct {
-	onHelloAck func(proto.HelloAck)
-	onConfig   func(proto.Config)
+	onHelloAck     func(proto.HelloAck)
+	onConfig       func(proto.Config)
+	onTailnetProbe func(proto.TailnetProbe)
 }
 
 // wsConn is a single live websocket connection with its own write pump.
@@ -149,6 +152,15 @@ func (c *wsConn) readLoop(h handlers) error {
 			var cfg proto.Config
 			if env.Decode(&cfg) == nil && h.onConfig != nil {
 				h.onConfig(cfg)
+			}
+		case proto.TypeTailnetProbe:
+			var probe proto.TailnetProbe
+			if derr := env.Decode(&probe); derr != nil {
+				c.log.Warn().Err(derr).Msg("cloud: undecodable tailnet_probe, ignoring")
+				continue
+			}
+			if h.onTailnetProbe != nil {
+				h.onTailnetProbe(probe)
 			}
 		default:
 			c.log.Debug().Str("type", string(env.Type)).Msg("cloud: ignoring unexpected frame type")

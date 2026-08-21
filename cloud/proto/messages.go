@@ -10,21 +10,23 @@ type MessageType string
 
 // Agent -> Cloud message types.
 const (
-	TypeHello        MessageType = "hello"         // first frame after connect
-	TypeSnapshot     MessageType = "snapshot"      // service catalog snapshot
-	TypeContainers   MessageType = "containers"    // non-docktail container inventory (metadata only)
-	TypeEvent        MessageType = "event"         // a single docker failure signal
-	TypeCheckResults MessageType = "check_results" // batched local-vantage probes
-	TypeLogExcerpt   MessageType = "log_excerpt"   // opt-in last N lines on incident
-	TypeHeartbeat    MessageType = "heartbeat"     // liveness, every HeartbeatInterval
-	TypeHostMetrics  MessageType = "host_metrics"  // periodic whole-host resource vitals
-	TypeTailnet      MessageType = "tailnet"       // local netmap view: peer device liveness
+	TypeHello          MessageType = "hello"           // first frame after connect
+	TypeSnapshot       MessageType = "snapshot"        // full state after each reconcile
+	TypeContainers     MessageType = "containers"      // non-docktail container inventory (metadata only)
+	TypeEvent          MessageType = "event"           // a single docker failure signal
+	TypeCheckResults   MessageType = "check_results"   // batched local-vantage probes
+	TypeLogExcerpt     MessageType = "log_excerpt"     // opt-in last N lines on incident
+	TypeHeartbeat      MessageType = "heartbeat"       // liveness, every HeartbeatInterval
+	TypeHostMetrics    MessageType = "host_metrics"    // periodic whole-host resource vitals
+	TypeTailnet        MessageType = "tailnet"         // local netmap view: peer device liveness
+	TypeTailnetControl MessageType = "tailnet_control" // Tailscale control-plane service state, answered on request
 )
 
 // Cloud -> Agent message types.
 const (
-	TypeHelloAck MessageType = "hello_ack" // accept/reject + assigned host id
-	TypeConfig   MessageType = "config"    // check config + log opt-in flags
+	TypeHelloAck     MessageType = "hello_ack"     // accept/reject + assigned host id
+	TypeConfig       MessageType = "config"        // check config + log opt-in flags
+	TypeTailnetProbe MessageType = "tailnet_probe" // ask the agent to refresh Tailscale control-plane service state
 )
 
 // Envelope wraps every frame on the wire. Payload is the JSON of the concrete
@@ -63,6 +65,7 @@ type Hello struct {
 	ProtocolVersion  int      `json:"protocol_version"`
 	Fingerprint      string   `json:"fingerprint"`                 // docker engine ID — the host identity & billable unit
 	TailscaleNodeID  string   `json:"tailscale_node_id,omitempty"` // mutable attribute, may be empty at boot
+	Tailnet          string   `json:"tailnet,omitempty"`           // tailnet name (e.g. "tail1234.ts.net") — groups hosts that share a control plane; empty ⇒ unknown/no tailnet
 	Hostname         string   `json:"hostname,omitempty"`          // display-only, may collide
 	AgentVersion     string   `json:"agent_version,omitempty"`
 	DockerVersion    string   `json:"docker_version,omitempty"`
@@ -318,6 +321,67 @@ type TailnetPeer struct {
 	LastSeen int64  `json:"last_seen,omitempty"`
 }
 
+// TailnetControlReport is the agent's answer to a [TailnetProbe]: what the
+// Tailscale *control plane* says about a set of services, read through the
+// Tailscale API with the credentials the OSS agent already holds
+// (TAILSCALE_OAUTH_CLIENT_ID/SECRET or TAILSCALE_API_KEY). It is the sole source
+// of the cloud's `tailnet` vantage.
+//
+// Why this and not the host's own `tailscale serve` config: serve state only says
+// "this host believes it is serving". It cannot see that the service is awaiting
+// admin approval, that its definition was deleted, or that the control plane
+// never registered the advertisement — all cases where the host looks healthy and
+// nobody can reach the service. The control plane is the authority; the local
+// serve config can lie.
+//
+// The credential never leaves the customer's host: the cloud asks a question and
+// receives metadata. Because one host's credentials cover the whole tailnet, the
+// cloud polls exactly ONE capable host per (workspace, tailnet) instead of having
+// every agent hammer the Tailscale API — see [TailnetProbe].
+//
+// Available=false means the agent could not answer at all (no credentials, no
+// tailnet, API refused). Reason carries a ControlUnavail* code so the UI can
+// explain what to do instead of showing a false outage. Additive and
+// metadata-only — no exec surface — and ProtocolVersion stays 1. An agent that
+// does not advertise [CapTailnetControl] is never probed, so an old agent simply
+// yields no tailnet vantage.
+type TailnetControlReport struct {
+	RequestID string                `json:"request_id,omitempty"` // echoes TailnetProbe.RequestID
+	Tailnet   string                `json:"tailnet,omitempty"`    // tailnet this answer covers; scopes which hosts it may be applied to
+	Available bool                  `json:"available"`
+	Reason    string                `json:"reason,omitempty"` // ControlUnavail*, set only when Available is false
+	CheckedAt int64                 `json:"checked_at"`       // unix ms the control plane was read
+	Services  []TailnetControlState `json:"services,omitempty"`
+}
+
+// TailnetControlState is the control plane's view of ONE service. Exists=false
+// means the control plane has no such service definition (HTTP 404) — the
+// service is published locally but the tailnet does not know about it.
+//
+// Hosts is every device the control plane believes advertises this service. The
+// cloud resolves per-service health by matching a host's tailscale_node_id
+// against these entries: no match ⇒ this host is not advertising, whatever its
+// local serve config claims.
+type TailnetControlState struct {
+	ServiceKey  string               `json:"service_key"`            // echoes the probed key, the cloud's service identity
+	ServiceName string               `json:"service_name,omitempty"` // tailscale service name, e.g. "svc:myapp"
+	Exists      bool                 `json:"exists"`
+	Hosts       []TailnetControlHost `json:"hosts,omitempty"`
+	Error       string               `json:"error,omitempty"` // per-service read failure; the cloud holds the previous state rather than inventing an outage
+}
+
+// TailnetControlHost is one device advertising a service, as the control plane
+// reports it. State is the normalized [ControlState] the agent derived from the
+// raw API fields; ApprovalLevel and Configured are the raw strings, carried for
+// display and forward-compatibility with control-plane vocabulary the agent does
+// not yet recognize.
+type TailnetControlHost struct {
+	NodeID        string `json:"node_id"` // tailscale StableNodeID, matched against hosts.tailscale_node_id
+	State         string `json:"state"`   // ControlState*
+	ApprovalLevel string `json:"approval_level,omitempty"`
+	Configured    string `json:"configured,omitempty"`
+}
+
 // ---------------------------------------------------------------------------
 // Cloud -> Agent
 // ---------------------------------------------------------------------------
@@ -384,6 +448,36 @@ type CheckConfig struct {
 	IntervalMS   int64  `json:"interval_ms"`
 }
 
+// TailnetProbe asks the agent to read the Tailscale control plane for the listed
+// services and answer with a [TailnetControlReport]. It is a REQUEST FOR
+// METADATA, not a command: the agent decides whether it can answer, the cloud
+// supplies no credentials and no destination beyond service names the agent
+// already published, and there is nothing to execute. The metadata-only
+// non-goals (no exec, no deploy, no shell) are unchanged.
+//
+// The cloud drives this instead of letting agents poll on their own so the
+// Tailscale API load does not scale with host count: one capable host per
+// (workspace, tailnet) is asked on an interval and on catalog changes, and its
+// answer covers every service on that tailnet. Agents enforce
+// [MinTailnetProbeIntervalMS] locally regardless of what the cloud asks, so a
+// buggy or hostile control plane can never turn the customer's own credentials
+// into an API-rate-limit incident.
+//
+// Sent only to agents that advertised [CapTailnetControl] in their Hello. An
+// older agent ignores the unknown frame type; the cloud never sends it one.
+type TailnetProbe struct {
+	RequestID string                `json:"request_id"`
+	Services  []TailnetProbeService `json:"services"`
+}
+
+// TailnetProbeService names one service to look up. ServiceKey is echoed back so
+// the cloud can map the answer to its own catalog without trusting the agent to
+// re-derive identity; ServiceName is the tailscale service name to query.
+type TailnetProbeService struct {
+	ServiceKey  string `json:"service_key"`
+	ServiceName string `json:"service_name"`
+}
+
 // Cloud-to-agent configuration limits. The frame cap is enforced before JSON
 // decoding by the agent; the item and field caps are enforced again after
 // decoding and by the control-plane write path.
@@ -396,6 +490,18 @@ const (
 	MinCheckIntervalMS      int64 = 5_000
 	DefaultCheckIntervalMS  int64 = 30_000
 	MaxCheckIntervalMS      int64 = 300_000
+
+	// MaxTailnetProbeServices bounds one [TailnetProbe]; the cloud pages larger
+	// catalogs across successive probes.
+	MaxTailnetProbeServices = 512
+	// MinTailnetProbeIntervalMS is the floor the AGENT enforces between two
+	// control-plane reads, independent of how often the cloud asks. It protects
+	// the customer's own Tailscale API quota from a buggy or hostile cloud.
+	MinTailnetProbeIntervalMS int64 = 60_000
+	// DefaultTailnetProbeIntervalMS is the cloud's polling cadence per
+	// (workspace, tailnet). Service state changes on human timescales (an admin
+	// approving a service), so this is deliberately slow.
+	DefaultTailnetProbeIntervalMS int64 = 300_000
 )
 
 // ---------------------------------------------------------------------------
@@ -405,7 +511,7 @@ const (
 // Vantages — the three points a service is observed from.
 const (
 	VantageLocal   = "local"   // agent -> container IP
-	VantageTailnet = "tailnet" // prober -> service FQDN over WireGuard
+	VantageTailnet = "tailnet" // Tailscale control plane: is the service advertised and approved?
 	VantagePublic  = "public"  // plain HTTP probe for Funnel services
 )
 
@@ -417,9 +523,58 @@ const (
 	ClassRefused    = "refused"
 	ClassTLS        = "tls"
 	ClassHTTP5xx    = "http_5xx"
-	ClassACLBlocked = "acl_blocked" // reserved for the deferred Control-API ACL audit; not produced by the netmap vantage
-	ClassServe      = "serve"       // tailnet vantage: service is up locally but not published via `tailscale serve`
+	ClassACLBlocked = "acl_blocked" // reserved for the deferred Control-API ACL audit; not produced by the tailnet vantage
 	ClassContainer  = "container"   // local down -> container problem
+
+	// Tailnet-vantage classes. All are derived from the Tailscale control plane
+	// (see [TailnetControlReport]), never from the host's local serve config.
+	ClassUnapproved     = "unapproved"      // advertised, but a human still has to approve it in the admin console
+	ClassNotAdvertised  = "not_advertised"  // the control plane does not list this host as advertising the service
+	ClassMisconfigured  = "misconfigured"   // the control plane has the host but its service config is invalid/incomplete
+	ClassServiceMissing = "service_missing" // no such service definition in the tailnet at all
+
+	// Deprecated: ClassServe was emitted by the removed `tailscale serve` vantage.
+	// Recognized so pre-existing incidents and stored rows still render; never
+	// produced. See docs/prober.md.
+	ClassServe = "serve"
+)
+
+// Tailnet control-plane service states, as normalized by the agent from the
+// Tailscale API. They mirror the states Tailscale itself shows in the admin
+// console. Unrecognized states from a newer control plane are passed
+// through verbatim and treated as [ControlStateUnknown] by the cloud.
+const (
+	ControlStateConnected       = "connected"           // advertised and approved — reachable
+	ControlStatePendingApproval = "pending_approval"    // advertised, awaiting admin approval — NOT reachable
+	ControlStateNeedsConfig     = "needs_configuration" // host known, config invalid or missing
+	ControlStatePreApproved     = "pre_approved"        // auto-approved but not yet advertising
+	ControlStateDraining        = "draining"            // deliberately winding down; existing conns still served
+	ControlStateNotAdvertised   = "not_advertised"      // control plane knows the service, not this host
+	ControlStateNoService       = "no_service"          // no such service definition in the tailnet
+	ControlStateUnknown         = "unknown"             // could not be determined
+)
+
+// CapTailnetControl is the [Hello.Capabilities] entry an agent advertises when it
+// can answer a [TailnetProbe] — i.e. it understands the frame AND has Tailscale
+// API credentials configured. The cloud probes only agents that advertise it, so
+// an older agent is never sent an unknown frame and simply has no tailnet
+// vantage.
+const CapTailnetControl = "tailnet_control"
+
+// Reasons a [TailnetControlReport] carries Available=false. The cloud surfaces
+// these verbatim so the UI can tell the operator what to fix rather than showing
+// a phantom outage.
+const (
+	ControlUnavailNoCredentials = "no_credentials" // no OAuth client / API key configured on the agent
+	ControlUnavailNoTailnet     = "no_tailnet"     // the host is not on a tailnet
+	ControlUnavailUnauthorized  = "unauthorized"   // 401 — credentials rejected
+	ControlUnavailForbidden     = "forbidden"      // 403 — credentials lack the Services read scope
+	ControlUnavailRateLimited   = "rate_limited"   // 429 — backing off
+	ControlUnavailAPIError      = "api_error"      // anything else (network, 5xx, unparseable)
+
+	// ControlUnavailUnsupported is synthesized BY THE CLOUD for a workspace whose
+	// hosts are all too old to answer a probe. It never appears on the wire.
+	ControlUnavailUnsupported = "unsupported"
 )
 
 // Caps for log capture (also enforced agent-side).

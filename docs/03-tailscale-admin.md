@@ -13,7 +13,7 @@ OAuth is recommended. It enables automatic service creation and avoids expiring 
    - Devices -> Core: Write
    - Keys -> Auth Keys: Write (only when using the sidecar method)
 
-   These same permissions also cover the optional `DELETE_UNUSED_SERVICES` cleanup, which lists Services, inspects their advertising hosts, and deletes the ones no host advertises. No extra scope is required.
+   These same permissions also cover the optional `DELETE_UNUSED_SERVICES` cleanup, which lists Services, inspects their advertising hosts, and deletes the ones no host advertises. They also cover [DockTail Cloud](06-cloud.md#tailnet-health) tailnet health, which reads the same advertising-host data to tell an unapproved or unadvertised service from a broken container. No extra scope is required, and the credentials never leave the host.
 4. Add the credentials to DockTail:
 
 ```yaml
@@ -49,7 +49,7 @@ API keys can also be loaded from `FILE__TAILSCALE_API_KEY` or `TAILSCALE_API_KEY
 
 ### Manual Mode
 
-DockTail can run without credentials. It advertises services locally through the Tailscale CLI, but you must manually create service definitions in the Tailscale Admin Console and configure ACL auto-approvers.
+DockTail can run without credentials. It advertises services locally through the Tailscale CLI, but you must manually create service definitions in the Tailscale Admin Console and configure ACL auto-approvers. Without credentials, DockTail Cloud also cannot report tailnet health, since it has no way to read the control plane.
 
 ### ACL Configuration
 

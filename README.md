@@ -138,7 +138,7 @@ Once you run DockTail on more than one machine, "is it still up?" gets tedious. 
 
 ```text
 ● down · OOM-killed                   →  Docker reported an OOM kill
-● local up · tailnet not served       →  the app is fine, the exposure isn't
+● local up · awaiting approval        →  the app is fine, the exposure isn't
 ● host offline · heartbeat missing    →  the box stopped reporting
 ```
 
