@@ -37,6 +37,7 @@ DockTail uses native Tailscale Services, not per-container Tailscale devices.
 - Automatic Docker container discovery through labels.
 - Automatic Tailscale service creation with OAuth or API key credentials.
 - HTTP, HTTPS, TCP, and TLS-terminated TCP support.
+- Optional PROXY protocol on TCP services so backends see the tailnet client IP.
 - Tailscale HTTPS with automatic certificates.
 - Tailscale Funnel for public internet access.
 - Multiple Tailscale services from one container.
@@ -74,7 +75,7 @@ docker compose up -d
 curl http://myapp.your-tailnet.ts.net
 ```
 
-This assumes the Docker host is connected to Tailscale and allowed to advertise services. See the full docs for host setup, sidecar setup, OAuth permissions, ACLs, labels, Funnel, and examples.
+This assumes the Docker host is connected to Tailscale and allowed to advertise services. See the full docs for host setup, sidecar setup, rootless Docker, OAuth permissions, ACLs, labels, Funnel, and examples.
 
 For Docker secrets or other mounted secret files, set `FILE__TAILSCALE_OAUTH_CLIENT_ID` / `FILE__TAILSCALE_OAUTH_CLIENT_SECRET` or `TAILSCALE_OAUTH_CLIENT_ID_FILE` / `TAILSCALE_OAUTH_CLIENT_SECRET_FILE` to the mounted file paths instead of putting the values directly in the environment.
 
@@ -101,6 +102,18 @@ labels:
   - "docktail.service.service-port=5432"
 ```
 
+Preserve the tailnet client IP on a TCP reverse proxy:
+
+```yaml
+labels:
+  - "docktail.service.enable=true"
+  - "docktail.service.name=traefik"
+  - "docktail.service.port=443"
+  - "docktail.service.protocol=tcp"
+  - "docktail.service.service-port=443"
+  - "docktail.service.proxy-protocol=2"
+```
+
 Expose a service publicly with Tailscale Funnel:
 
 ```yaml
@@ -124,9 +137,9 @@ labels:
 Once you run DockTail on more than one machine, "is it still up?" gets tedious. [DockTail Cloud](https://docktail.org/cloud/) is a hosted dashboard for that — and because it already has the Docker and Tailscale context, it tells you *which* kind of broken you're looking at:
 
 ```text
-● down · exit 137 · likely OOM        →  the container failed
-● local up · tailnet not served       →  the app is fine, the exposure isn't
-● host offline · heartbeat missing    →  the whole box went away
+● down · OOM-killed                   →  Docker reported an OOM kill
+● local up · awaiting approval        →  the app is fine, the exposure isn't
+● host offline · heartbeat missing    →  the box stopped reporting
 ```
 
 It rides along with the agent you already run — no second binary. Set one environment variable and the same container starts reporting:

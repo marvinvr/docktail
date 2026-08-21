@@ -31,6 +31,37 @@ sudo tailscale up --advertise-tags=tag:server --reset
 
 The `--reset` flag briefly drops the Tailscale connection. If you are connected through SSH over Tailscale, your session may be interrupted until Tailscale reconnects.
 
+### Rootless Docker
+
+When Docker runs rootless, the DockTail container is your user, not root. Host `tailscaled` then rejects serve-config writes unless that user is the Tailscale operator:
+
+```bash
+sudo tailscale set --operator=$USER
+```
+
+`tailscale set --operator` does not drop the connection. The node still needs the ACL tag from the host setup above. If it is not tagged yet:
+
+```bash
+sudo tailscale up --advertise-tags=tag:server --operator=$USER --reset
+```
+
+`--operator` lets that Unix user manage `tailscaled` (serve, Funnel, `up`/`down`). That is required for the host setup with rootless Docker. If you do not want to grant the Docker user that access, use the [Tailscale Sidecar](#tailscale-sidecar) instead.
+
+Rootless Docker also changes two paths:
+
+**Docker socket.** Mount the user socket, not `/var/run/docker.sock`. Replace `1000` with your UID (`id -u`):
+
+```yaml
+volumes:
+  - /run/user/1000/docker.sock:/var/run/docker.sock:ro
+  - /var/run/tailscale:/var/run/tailscale
+```
+
+**Container reachability.** Default direct mode tells host `tailscaled` to connect to the container IP. Those IPs are often unreachable from the host in rootless Docker. If the service advertises but does not connect:
+
+- Set `docktail.service.direct=false` and publish the container port, so Tailscale proxies to `127.0.0.1:<host-port>`.
+- Or use the [Tailscale Sidecar](#tailscale-sidecar) on the same Docker network as the app. Prefer that over `network_mode: host` on rootless Docker.
+
 ### Tailscale Sidecar
 
 Use this setup when the host does not run Tailscale directly. It is the required setup on macOS and Windows (Docker Desktop, OrbStack, Colima) and on many NAS devices, because `tailscaled` runs inside the Docker environment and shares its socket with DockTail through a named volume instead of a host mount:
@@ -74,4 +105,4 @@ volumes:
 
 Set `TAILSCALE_AUTH_KEY` to authenticate the Tailscale container. Generate it in the Tailscale Admin Console under Settings -> Keys. The sidecar should advertise `tag:server` so it can satisfy the ACL auto-approver example below.
 
-The sidecar uses `network_mode: host` so it can reach container IPs on any Docker network. On Docker Desktop this requires enabling host networking under Settings -> Resources -> Network. Alternatively, remove `network_mode: host` and attach the sidecar to the same Docker network as the containers you expose.
+The sidecar uses `network_mode: host` so it can reach container IPs on any Docker network. On Docker Desktop this requires enabling host networking under Settings -> Resources -> Network. Alternatively, remove `network_mode: host` and attach the sidecar to the same Docker network as the containers you expose. On rootless Docker, prefer the shared-network form; host networking is limited in that mode.

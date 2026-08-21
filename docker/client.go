@@ -230,6 +230,29 @@ func resolveProtocols(containerID, targetPort, servicePort, serviceProtocol, pro
 	return protocol, servicePort, serviceProtocol, nil
 }
 
+// parseProxyProtocol validates docktail.service.proxy-protocol. Empty means
+// disabled (0). Tailscale only accepts versions 1 or 2, and only on TCP
+// forwarding (service-protocol tcp or tls-terminated-tcp). HTTP/HTTPS must
+// reject the label: Tailscale errors with "PROXY protocol is only supported
+// for TCP forwarding", which would fail every reconcile.
+func parseProxyProtocol(value, serviceProtocol string) (int, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	if serviceProtocol != "tcp" && serviceProtocol != "tls-terminated-tcp" {
+		return 0, fmt.Errorf("docktail.service.proxy-protocol is only supported for TCP forwarding (service-protocol tcp or tls-terminated-tcp), not %s", serviceProtocol)
+	}
+	switch value {
+	case "1":
+		return 1, nil
+	case "2":
+		return 2, nil
+	default:
+		return 0, fmt.Errorf("invalid docktail.service.proxy-protocol: %q (must be 1 or 2)", value)
+	}
+}
+
 // resolveDestPort determines the destination IP and port based on networking mode.
 // Returns (destIP, destPort, error).
 func (c *Client) resolveDestPort(cctx *containerCtx, targetPort string) (string, string, error) {
@@ -760,6 +783,11 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		cctx.destIP = destIP
 		monIP, monPort := c.monitorTarget(ctx, cctx, targetPort)
 
+		proxyProtocol, err := parseProxyProtocol(labels[apptypes.LabelProxyProtocol], serviceProtocol)
+		if err != nil {
+			return nil, err
+		}
+
 		primary := &apptypes.ContainerService{
 			ContainerID:        cctx.containerID[:12],
 			ContainerName:      cctx.containerName,
@@ -770,6 +798,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 			TargetPort:         destPort,
 			ServiceProtocol:    serviceProtocol,
 			Protocol:           protocol,
+			ProxyProtocol:      proxyProtocol,
 			Tags:               cctx.tags,
 			IPAddress:          destIP,
 			MonitorIP:          monIP,
@@ -898,6 +927,17 @@ func (c *Client) parseIndexedPorts(
 			continue
 		}
 
+		idxProxyProtocol, err := parseProxyProtocol(labels[prefix+"proxy-protocol"], serviceProtocol)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("container", cctx.containerName).
+				Str("service", idxServiceName).
+				Int("index", idx).
+				Msg("Invalid proxy-protocol for indexed service, skipping")
+			continue
+		}
+
 		// Check for duplicate service name + port combo
 		dedupKey := idxServiceName + ":" + servicePort
 		if prevIdx, exists := usedServicePorts[dedupKey]; exists {
@@ -943,6 +983,7 @@ func (c *Client) parseIndexedPorts(
 			TargetPort:         idxDestPort,
 			ServiceProtocol:    serviceProtocol,
 			Protocol:           protocol,
+			ProxyProtocol:      idxProxyProtocol,
 			Tags:               cctx.tags,
 			IPAddress:          idxDestIP,
 			MonitorIP:          monIP,

@@ -176,8 +176,8 @@
                 </div>
 
                 <div class="rounded border border-amber-200 bg-amber-50 p-3 mb-4">
-                  <div class="text-[9px] uppercase tracking-wider text-amber-700 mb-1">Verdict · container failure</div>
-                  <p class="text-[11px] sm:text-xs leading-relaxed text-gray-700">Container exited with code <span class="font-semibold">137</span> — likely out of memory. Its Tailscale service is still published.</p>
+                  <div class="text-[9px] uppercase tracking-wider text-amber-700 mb-1">Verdict · container · oom</div>
+                  <p class="text-[11px] sm:text-xs leading-relaxed text-gray-700">OOM-killed by Docker. Exit 137 (SIGKILL). Its Tailscale service is still published.</p>
                 </div>
 
                 <div class="grid grid-cols-1 min-[420px]:grid-cols-3 gap-2 mb-4">
@@ -193,8 +193,8 @@
                   </div>
                   <div class="rounded border border-gray-200 bg-gray-50 p-2.5">
                     <div class="text-[9px] uppercase tracking-wider text-gray-400 mb-1.5">docker</div>
-                    <div class="text-[11px] text-amber-700">● OOM</div>
-                    <div class="mt-1 text-[9px] text-gray-400">restart #4</div>
+                    <div class="text-[11px] text-amber-700">● oom</div>
+                    <div class="mt-1 text-[9px] text-gray-400">docker event</div>
                   </div>
                 </div>
 
@@ -204,8 +204,8 @@
                     <span class="text-[9px] text-gray-400">at incident open</span>
                   </div>
                   <div class="grid grid-cols-3 divide-x divide-gray-200 px-1 py-3 text-center">
-                    <div><div class="text-[9px] text-gray-400">exit</div><div class="mt-0.5 text-xs text-gray-800">137</div></div>
-                    <div><div class="text-[9px] text-gray-400">memory</div><div class="mt-0.5 text-xs text-gray-800">98%</div></div>
+                    <div><div class="text-[9px] text-gray-400">exit</div><div class="mt-0.5 text-xs text-gray-800">137 · SIGKILL</div></div>
+                    <div><div class="text-[9px] text-gray-400">event</div><div class="mt-0.5 text-xs text-gray-800">oom</div></div>
                     <div><div class="text-[9px] text-gray-400">logs</div><div class="mt-0.5 text-xs text-gray-800">40 lines</div></div>
                   </div>
                 </div>
@@ -232,8 +232,8 @@
               <span class="text-[10px] text-gray-400">local down</span>
             </div>
             <h3 class="text-sm font-semibold text-gray-900 mb-2">The app itself failed.</h3>
-            <p class="text-sm text-gray-500 leading-relaxed mb-5">Exit codes, OOM kills, restart loops, health changes, and the log tail captured at failure.</p>
-            <div class="rounded bg-gray-900 px-3 py-2.5 text-[11px] text-gray-300"><span class="text-red-300">● down</span> · exit 137 · likely OOM</div>
+            <p class="text-sm text-gray-500 leading-relaxed mb-5">Exit codes, Docker OOM events, restart loops, health changes, and the log tail captured at failure.</p>
+            <div class="rounded bg-gray-900 px-3 py-2.5 text-[11px] text-gray-300"><span class="text-red-300">● down</span> · OOM-killed</div>
           </article>
 
           <article class="rounded-lg border border-gray-200 bg-white p-5 sm:p-6">

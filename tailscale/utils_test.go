@@ -1,6 +1,7 @@
 package tailscale
 
 import (
+	"strings"
 	"testing"
 
 	apptypes "github.com/marvinvr/docktail/types"
@@ -120,6 +121,42 @@ func TestIsUntaggedNodeError(t *testing.T) {
 				t.Errorf("isUntaggedNodeError(%q) = %v, want %v", tt.stderr, result, tt.expected)
 			}
 		})
+	}
+}
+
+func TestIsServeConfigDeniedError(t *testing.T) {
+	tests := []struct {
+		name     string
+		stderr   string
+		expected bool
+	}{
+		{"exact tailscale phrasing", "sending serve config: Access denied: serve config denied", true},
+		{"bare denial", "serve config denied", true},
+		{"generic access denied is not enough", "Access denied", false},
+		{"unrelated error", "service hosts must be tagged nodes", false},
+		{"empty string", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isServeConfigDeniedError(tt.stderr)
+			if result != tt.expected {
+				t.Errorf("isServeConfigDeniedError(%q) = %v, want %v", tt.stderr, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestServeConfigDeniedMessage(t *testing.T) {
+	got := serveConfigDeniedMessage("add service")
+	if !strings.Contains(got, "failed to add service") {
+		t.Errorf("serveConfigDeniedMessage() missing action: %q", got)
+	}
+	if !strings.Contains(got, "sudo tailscale set --operator=$USER") {
+		t.Errorf("serveConfigDeniedMessage() missing operator hint: %q", got)
+	}
+	if !strings.Contains(got, "https://docktail.org/docs/#rootless-docker") {
+		t.Errorf("serveConfigDeniedMessage() missing docs link: %q", got)
 	}
 }
 

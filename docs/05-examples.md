@@ -82,6 +82,27 @@ services:
       - "docktail.service.service-port=5432"
 ```
 
+### Reverse Proxy With Client IPs (PROXY Protocol)
+
+TCP services normally hide the tailnet client address: the backend sees tailscaled's own IP. Set `docktail.service.proxy-protocol` so Tailscale prepends a [PROXY protocol](https://www.haproxy.com/blog/use-the-proxy-protocol-to-preserve-a-clients-ip-address) header. The backend (Traefik, Caddy, HAProxy, nginx, and similar) must be configured to accept it.
+
+```yaml
+services:
+  traefik:
+    image: traefik:latest
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=traefik"
+      - "docktail.service.port=443"
+      - "docktail.service.protocol=tcp"
+      - "docktail.service.service-protocol=tcp"
+      - "docktail.service.service-port=443"
+      - "docktail.service.proxy-protocol=2"
+      - "docktail.service.direct=false"
+```
+
+Without this label, access logs, rate limits, and IP allowlists on the reverse proxy only see tailscaled. HTTP/HTTPS DockTail services cannot use this label; Tailscale rejects PROXY protocol for those modes.
+
 ### Custom Docker Network
 
 ```yaml
@@ -101,6 +122,8 @@ networks:
 ```
 
 ### Legacy Published-Port Mode
+
+Use published host ports when you cannot proxy to the container IP. That includes older setups and [rootless Docker](02-installation.md#rootless-docker) with host Tailscale, where `tailscaled` often cannot reach container IPs.
 
 ```yaml
 services:

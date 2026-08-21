@@ -22,8 +22,13 @@ type ContainerService struct {
 	//   - host-network mode:   the docker host gateway and the container port.
 	// Empty for direct mode (IPAddress is already the container IP), when the agent
 	// itself shares the host netns (127.0.0.1 works), or when nothing is resolvable.
-	MonitorIP        string
-	MonitorPort      string
+	MonitorIP   string
+	MonitorPort string
+	// ProxyProtocol is the PROXY protocol version Tailscale should prepend on
+	// TCP forwards (1 or 2). Zero means the header is not sent. Only valid
+	// with service-protocol tcp or tls-terminated-tcp; HTTP/HTTPS
+	// service-protocol must not set this, or Tailscale serve rejects the config.
+	ProxyProtocol    int
 	FunnelEnabled    bool   // Enable Tailscale Funnel (public internet access)
 	FunnelPort       string // Container port for funnel (separate from service port)
 	FunnelTargetPort string // Host port that maps to FunnelPort
@@ -52,6 +57,7 @@ const (
 	LabelServiceProtocol  = "docktail.service.service-protocol"
 	LabelTarget           = "docktail.service.port"
 	LabelTargetProtocol   = "docktail.service.protocol"
+	LabelProxyProtocol    = "docktail.service.proxy-protocol"
 	LabelTags             = "docktail.tags"
 	LabelFunnelEnable     = "docktail.funnel.enable"
 	LabelFunnelPort       = "docktail.funnel.port"        // Container port (like service.port)

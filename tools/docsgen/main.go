@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -127,10 +128,21 @@ func readMarkdown(sourceDir string) (string, error) {
 		if i > 0 {
 			out.WriteString("\n\n")
 		}
-		out.Write(bytes.TrimSpace(body))
+		// Source files use NN-name.md#anchor so GitHub can jump across
+		// pages. The generated site is one HTML page, so collapse those
+		// to in-page hashes.
+		out.Write(bytes.TrimSpace(rewriteDocFileLinks(body)))
 		out.WriteByte('\n')
 	}
 	return out.String(), nil
+}
+
+// docFileLink matches a markdown link to another numbered docs file, with
+// an optional heading hash. The generated site concatenates those files.
+var docFileLink = regexp.MustCompile(`\]\(\d{2}-[a-z0-9-]+\.md(#[a-z0-9-]+)?\)`)
+
+func rewriteDocFileLinks(body []byte) []byte {
+	return docFileLink.ReplaceAll(body, []byte("]($1)"))
 }
 
 func renderMarkdown(source []byte) (string, []heading, error) {

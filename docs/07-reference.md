@@ -20,7 +20,7 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `DIAGNOSTICS_INTERVAL` | `10s` | How often diagnostics samples the hosting state. |
 | `DIAGNOSTICS_HEARTBEAT` | `10m` | How often a record is written even when nothing changed, so a quiet period is distinguishable from a stopped agent. |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval. |
-| `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. |
+| `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. Rootless Docker typically uses `unix:///run/user/<uid>/docker.sock`. |
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Tailscale daemon socket. |
 | `EXIT_ON_SOCKET_LOSS` | `true` | When `true`, DockTail exits if the Tailscale socket stays unreachable past the grace period, so the container's restart policy can re-establish the mount. See [Tailscale Socket Loss](#tailscale-socket-loss). |
 | `SOCKET_LOSS_GRACE_PERIOD` | `90s` | How long the Tailscale socket may stay unreachable before DockTail exits. Must be longer than a normal `tailscaled` restart. |
@@ -64,6 +64,8 @@ Tailscale-facing `docktail.service.service-protocol` values:
 | `https` | Layer 7 HTTPS with automatic TLS. |
 | `tcp` | Layer 4 TCP. |
 | `tls-terminated-tcp` | Layer 4 TCP; Tailscale terminates incoming TLS and forwards decrypted TCP to the backend. |
+
+`docktail.service.proxy-protocol` (`1` or `2`) is valid only with `tcp` or `tls-terminated-tcp`. It is off by default because the backend must understand the PROXY header. HTTP/HTTPS values are rejected.
 
 Container-facing `docktail.service.protocol` values:
 

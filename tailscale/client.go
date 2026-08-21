@@ -123,10 +123,11 @@ func (t *apiKeyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // ServiceEndpoint represents a single endpoint for comparison
 type ServiceEndpoint struct {
-	ServiceName string // e.g., "svc:web"
-	Port        string // e.g., "443"
-	Protocol    string // e.g., "http", "https", "tcp"
-	Destination string // e.g., "http://localhost:9080"
+	ServiceName   string // e.g., "svc:web"
+	Port          string // e.g., "443"
+	Protocol      string // e.g., "http", "https", "tcp"
+	Destination   string // e.g., "http://localhost:9080"
+	ProxyProtocol int    // 0, 1, or 2 as reported by `tailscale serve status`
 }
 
 // TailscaleStatus represents the structure of 'tailscale serve status --json'
@@ -147,6 +148,9 @@ type TailscaleTCPConfig struct {
 	// and TLS-terminated-TCP endpoints. HTTP/HTTPS endpoints leave this empty
 	// and store their backend in the Web handler config instead.
 	TCPForward string `json:"TCPForward"`
+	// ProxyProtocol is the PROXY protocol version prepended on TCP forwards.
+	// Omitted (0) when Tailscale is not sending a PROXY header.
+	ProxyProtocol int `json:"ProxyProtocol"`
 }
 
 type TailscaleWebConfig struct {
@@ -210,16 +214,17 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 				Msg("Service not found in current state, will add")
 		} else {
 			// Service exists - check if configuration changed
-			expectedDest := buildDestination(desired)
-			if !sameDestination(current.Destination, expectedDest) || current.Protocol != desired.ServiceProtocol {
+			if serviceConfigChanged(current, desired) {
 				toAdd[key] = desired
 				log.Info().
 					Str("key", key).
 					Str("service", desired.ServiceName).
 					Str("current_dest", current.Destination).
-					Str("expected_dest", expectedDest).
+					Str("expected_dest", buildDestination(desired)).
 					Str("current_protocol", current.Protocol).
 					Str("expected_protocol", desired.ServiceProtocol).
+					Int("current_proxy_protocol", current.ProxyProtocol).
+					Int("expected_proxy_protocol", desired.ProxyProtocol).
 					Msg("Service configuration changed, will update")
 			} else {
 				// Service exists and matches - no action needed
@@ -670,6 +675,9 @@ type serviceHost struct {
 
 // listServiceHosts returns the devices currently advertising the given Service.
 // An empty slice means no host is advertising it, i.e. the Service is unused.
+// A non-2xx response is returned as an *APIStatusError so callers can tell
+// "no such Service definition" (404) and credential/quota problems (401/403/429)
+// apart from a transport failure.
 func (c *Client) listServiceHosts(ctx context.Context, serviceName string) ([]serviceHost, error) {
 	apiURL := fmt.Sprintf("%s/api/v2/tailnet/%s/services/%s/devices", c.baseURL, url.PathEscape(c.tailnet), url.PathEscape(serviceName))
 
@@ -686,7 +694,7 @@ func (c *Client) listServiceHosts(ctx context.Context, serviceName string) ([]se
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("list service hosts API returned error status %d: %s", resp.StatusCode, string(body))
+		return nil, &APIStatusError{Op: "list service hosts", StatusCode: resp.StatusCode, Body: string(body)}
 	}
 
 	var result struct {

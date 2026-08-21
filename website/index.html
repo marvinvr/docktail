@@ -559,7 +559,7 @@
             <div class="rounded border border-white/10 bg-white/[0.03] p-3 mb-4">
               <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">Why</div>
               <p class="text-xs sm:text-sm text-gray-300 leading-relaxed">
-                Container exited with code <span class="text-amber-300">137</span> — likely out of memory. The Tailscale service is still published.
+                OOM-killed by Docker. Exit <span class="text-amber-300">137</span> (SIGKILL). The Tailscale service is still published.
               </p>
             </div>
 
@@ -576,14 +576,14 @@
               </div>
               <div class="rounded border border-white/10 bg-white/[0.02] p-3">
                 <div class="text-[10px] uppercase tracking-wider text-gray-500 mb-2">docker</div>
-                <div class="flex items-center gap-1.5 text-xs text-amber-300"><span>●</span> OOM</div>
-                <div class="mt-1 text-[10px] text-gray-500">restart #4</div>
+                <div class="flex items-center gap-1.5 text-xs text-amber-300"><span>●</span> oom</div>
+                <div class="mt-1 text-[10px] text-gray-500">docker event</div>
               </div>
             </div>
 
             <div class="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-white/10 pt-4 text-[11px] text-gray-500">
-              <span><span class="text-gray-300">exit</span> 137</span>
-              <span><span class="text-gray-300">memory</span> 98%</span>
+              <span><span class="text-gray-300">exit</span> 137 · SIGKILL</span>
+              <span><span class="text-gray-300">event</span> oom</span>
               <span><span class="text-gray-300">logs</span> 40 lines captured</span>
             </div>
           </div>

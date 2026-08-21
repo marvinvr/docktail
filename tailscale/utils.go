@@ -116,6 +116,25 @@ func isUntaggedNodeError(stderr string) bool {
 	return strings.Contains(stderr, "service hosts must be tagged nodes")
 }
 
+// isServeConfigDeniedError reports whether tailscaled rejected a serve or
+// Funnel write because the connecting process is neither root nor the
+// configured operator. Common with rootless Docker against a host tailscaled.
+func isServeConfigDeniedError(stderr string) bool {
+	return strings.Contains(stderr, "serve config denied")
+}
+
+// serveConfigDeniedMessage is the operator-facing hint for isServeConfigDeniedError.
+func serveConfigDeniedMessage(action string) string {
+	return fmt.Sprintf("failed to %s: Tailscale denied the serve config write. "+
+		"The process talking to tailscaled is not root and is not the configured operator. "+
+		"This is common with rootless Docker on the host Tailscale setup.\n"+
+		"To fix this:\n"+
+		"  1. Host install: sudo tailscale set --operator=$USER\n"+
+		"     The node still needs an ACL tag (sudo tailscale up --advertise-tags=tag:server --reset if it is not tagged yet).\n"+
+		"  2. Or use the sidecar setup so DockTail talks to a containerized tailscaled instead of the host daemon.\n"+
+		"Rootless Docker notes: https://docktail.org/docs/#rootless-docker", action)
+}
+
 // isManagedService checks if a service name has the "svc:" prefix
 // This indicates it's managed by DockTail and safe to modify
 func isManagedService(serviceName string) bool {
@@ -168,4 +187,15 @@ func buildDestination(svc *apptypes.ContainerService) string {
 	// Use the service protocol directly in the destination URL
 	// The protocol flag and destination protocol should match the service configuration
 	return fmt.Sprintf("%s://%s:%s", svc.Protocol, svc.IPAddress, svc.TargetPort)
+}
+
+// serviceConfigChanged reports whether the advertised endpoint differs from the
+// desired container labels. Destination, Tailscale-facing protocol, and PROXY
+// protocol version are all compared so enabling, changing, or removing
+// --proxy-protocol is picked up on the next reconcile.
+func serviceConfigChanged(current ServiceEndpoint, desired *apptypes.ContainerService) bool {
+	expectedDest := buildDestination(desired)
+	return !sameDestination(current.Destination, expectedDest) ||
+		current.Protocol != desired.ServiceProtocol ||
+		current.ProxyProtocol != desired.ProxyProtocol
 }

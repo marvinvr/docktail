@@ -145,6 +145,33 @@ wait_for_service_state() {
     return 1
 }
 
+# Poll until a TCP handler reports the expected PROXY protocol version.
+# 0 / omitted means the header is not being sent. Used after label changes
+# because container replacement briefly drains the old serve config.
+wait_for_proxy_protocol() {
+    local name="svc:$1"
+    local expected="$2"
+    local timeout="${3:-30}"
+    local elapsed=0
+    local port actual
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        refresh_serve_status
+        port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
+        if [ -n "$port" ]; then
+            actual=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].ProxyProtocol // 0" 2>/dev/null || echo "0")
+            if [ "$actual" = "$expected" ]; then
+                return 0
+            fi
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    fail "$name did not converge to PROXY protocol $expected within ${timeout}s"
+    return 1
+}
+
 # Check if a service exists in the serve status
 assert_service_exists() {
     local name="svc:$1"
@@ -239,6 +266,26 @@ assert_service_protocol() {
         pass "$name protocol is $expected_proto"
     else
         fail "$name expected protocol $expected_proto, got $actual"
+    fi
+}
+
+# Check PROXY protocol version on the TCP handler (0 / omitted means unset).
+assert_service_proxy_protocol() {
+    local name="svc:$1"
+    local expected="$2"
+    local port
+    port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
+    if [ -z "$port" ]; then
+        fail "$name proxy-protocol check: no TCP config found"
+        return
+    fi
+
+    local actual
+    actual=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].ProxyProtocol // 0" 2>/dev/null || echo "0")
+    if [ "$actual" = "$expected" ]; then
+        pass "$name PROXY protocol is $expected"
+    else
+        fail "$name expected PROXY protocol $expected, got $actual"
     fi
 }
 
@@ -505,6 +552,32 @@ assert_service_exists       "e2e-proto-tls-terminated-tcp"
 assert_service_port         "e2e-proto-tls-terminated-tcp" "6697"
 assert_service_protocol     "e2e-proto-tls-terminated-tcp" "tls-terminated-tcp"
 
+echo "  --- TCP with PROXY protocol v2 ---"
+assert_service_exists       "e2e-proxy-protocol"
+assert_service_port         "e2e-proxy-protocol" "8443"
+assert_service_protocol     "e2e-proxy-protocol" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol" "2"
+assert_service_proxy_protocol "e2e-proto-tcp" "0"
+
+echo "  --- HTTP + proxy-protocol is rejected ---"
+assert_service_not_exists   "e2e-proxy-protocol-http"
+wait_for_docktail_log "docktail.service.proxy-protocol is only supported for TCP forwarding"
+
+echo "  --- Indexed TCP service has its own proxy-protocol ---"
+assert_service_exists       "e2e-proxy-protocol-web"
+assert_service_protocol     "e2e-proxy-protocol-web" "http"
+assert_service_proxy_protocol "e2e-proxy-protocol-web" "0"
+assert_service_exists       "e2e-proxy-protocol-idx"
+assert_service_port         "e2e-proxy-protocol-idx" "9000"
+assert_service_protocol     "e2e-proxy-protocol-idx" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol-idx" "2"
+
+echo "  --- Change fixture starts without PROXY protocol ---"
+assert_service_exists       "e2e-proxy-protocol-change"
+assert_service_port         "e2e-proxy-protocol-change" "9001"
+assert_service_protocol     "e2e-proxy-protocol-change" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol-change" "0"
+
 # ==============================================================================
 # 2. Smart Defaults
 # ==============================================================================
@@ -715,6 +788,11 @@ assert_service_exists       "e2e-proto-http"
 assert_service_exists       "e2e-proto-https"
 assert_service_exists       "e2e-proto-tcp"
 assert_service_exists       "e2e-proto-tls-terminated-tcp"
+assert_service_exists       "e2e-proxy-protocol"
+assert_service_exists       "e2e-proxy-protocol-web"
+assert_service_exists       "e2e-proxy-protocol-idx"
+assert_service_exists       "e2e-proxy-protocol-change"
+assert_service_not_exists   "e2e-proxy-protocol-http"
 assert_service_exists       "e2e-default-minimal"
 assert_service_exists       "e2e-net-custom"
 assert_service_exists       "e2e-multiport"
@@ -736,7 +814,9 @@ assert_service_not_exists   "e2e-manual-protected"  # cleaned up explicitly
 # A correctly reconciling TCP service is flagged as "changed" zero times once it
 # has been established. We measure the number of "Service configuration changed"
 # log lines for the TCP service over several reconciliation cycles; with the bug
-# present the count grows by one per cycle, with the fix it stays flat.
+# present the count grows by one per cycle, with the fix it stays flat. The
+# PROXY-protocol service is included so a missing ProxyProtocol field in serve
+# status cannot flap the endpoint every cycle (issue #77).
 
 log "12. TCP Reconciliation Stability (issue #56)"
 
@@ -753,15 +833,27 @@ assert_service_exists       "e2e-proto-tcp"
 assert_service_protocol     "e2e-proto-tcp" "tcp"
 assert_service_exists       "e2e-proto-tls-terminated-tcp"
 assert_service_protocol     "e2e-proto-tls-terminated-tcp" "tls-terminated-tcp"
+assert_service_exists       "e2e-proxy-protocol"
+assert_service_protocol     "e2e-proxy-protocol" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol" "2"
+assert_service_exists       "e2e-proxy-protocol-idx"
+assert_service_protocol     "e2e-proxy-protocol-idx" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol-idx" "2"
 
 echo "  Measuring TCP reconciliation stability across multiple cycles..."
 before_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tcp:5432")
 before_tls_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tls-terminated-tcp:6697")
+before_proxy_changed=$(count_service_changed "key=svc:e2e-proxy-protocol:8443")
+before_idx_proxy_changed=$(count_service_changed "key=svc:e2e-proxy-protocol-idx:9000")
 sleep 16   # >= 3 reconcile cycles at RECONCILE_INTERVAL=5s
 after_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tcp:5432")
 after_tls_tcp_changed=$(count_service_changed "key=svc:e2e-proto-tls-terminated-tcp:6697")
+after_proxy_changed=$(count_service_changed "key=svc:e2e-proxy-protocol:8443")
+after_idx_proxy_changed=$(count_service_changed "key=svc:e2e-proxy-protocol-idx:9000")
 tcp_changed_delta=$((after_tcp_changed - before_tcp_changed))
 tls_tcp_changed_delta=$((after_tls_tcp_changed - before_tls_tcp_changed))
+proxy_changed_delta=$((after_proxy_changed - before_proxy_changed))
+idx_proxy_changed_delta=$((after_idx_proxy_changed - before_idx_proxy_changed))
 
 if [ "$tcp_changed_delta" -le 0 ]; then
     pass "TCP service stable: not re-detected as changed across cycles (delta=$tcp_changed_delta)"
@@ -773,6 +865,18 @@ if [ "$tls_tcp_changed_delta" -le 0 ]; then
     pass "TLS-terminated TCP service stable: not re-detected as changed across cycles (delta=$tls_tcp_changed_delta)"
 else
     fail "TLS-terminated TCP service re-detected as changed $tls_tcp_changed_delta time(s) across reconcile cycles (issue #71)"
+fi
+
+if [ "$proxy_changed_delta" -le 0 ]; then
+    pass "PROXY-protocol TCP service stable: not re-detected as changed across cycles (delta=$proxy_changed_delta)"
+else
+    fail "PROXY-protocol TCP service re-detected as changed $proxy_changed_delta time(s) across reconcile cycles (issue #77: ProxyProtocol not parsed from serve status)"
+fi
+
+if [ "$idx_proxy_changed_delta" -le 0 ]; then
+    pass "Indexed PROXY-protocol TCP service stable: not re-detected as changed across cycles (delta=$idx_proxy_changed_delta)"
+else
+    fail "Indexed PROXY-protocol TCP service re-detected as changed $idx_proxy_changed_delta time(s) across reconcile cycles (issue #77)"
 fi
 
 # ==============================================================================
@@ -959,10 +1063,89 @@ else
 fi
 
 # ==============================================================================
-# 16. Log Health
+# 16. PROXY Protocol Label Changes (issue #77)
+# ==============================================================================
+#
+# https://github.com/marvinvr/docktail/issues/77
+# Enabling, changing, or removing docktail.service.proxy-protocol must update
+# the advertised Tailscale serve config. This is the live counterpart of the
+# unit tests that compare ProxyProtocol from `serve status --json`.
+
+log "16. PROXY Protocol Label Changes (issue #77)"
+
+echo "  --- Pre-check: change fixture is TCP without PROXY protocol ---"
+refresh_serve_status
+assert_service_exists       "e2e-proxy-protocol-change"
+assert_service_protocol     "e2e-proxy-protocol-change" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol-change" "0"
+
+echo "  --- Recreating container with proxy-protocol=2 ---"
+docker stop e2e-proxy-protocol-change >/dev/null 2>&1 || true
+docker rm e2e-proxy-protocol-change >/dev/null 2>&1 || true
+docker run -d \
+    --name e2e-proxy-protocol-change \
+    --restart no \
+    --label "docktail.service.enable=true" \
+    --label "docktail.service.name=e2e-proxy-protocol-change" \
+    --label "docktail.service.port=80" \
+    --label "docktail.service.protocol=tcp" \
+    --label "docktail.service.service-port=9001" \
+    --label "docktail.service.service-protocol=tcp" \
+    --label "docktail.service.proxy-protocol=2" \
+    nginx:alpine >/dev/null 2>&1
+
+wait_for_proxy_protocol "e2e-proxy-protocol-change" "2" "$((RECONCILE_WAIT * 3))"
+assert_service_exists       "e2e-proxy-protocol-change"
+assert_service_protocol     "e2e-proxy-protocol-change" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol-change" "2"
+
+echo "  --- Changing proxy-protocol from 2 to 1 ---"
+docker stop e2e-proxy-protocol-change >/dev/null 2>&1 || true
+docker rm e2e-proxy-protocol-change >/dev/null 2>&1 || true
+docker run -d \
+    --name e2e-proxy-protocol-change \
+    --restart no \
+    --label "docktail.service.enable=true" \
+    --label "docktail.service.name=e2e-proxy-protocol-change" \
+    --label "docktail.service.port=80" \
+    --label "docktail.service.protocol=tcp" \
+    --label "docktail.service.service-port=9001" \
+    --label "docktail.service.service-protocol=tcp" \
+    --label "docktail.service.proxy-protocol=1" \
+    nginx:alpine >/dev/null 2>&1
+
+wait_for_proxy_protocol "e2e-proxy-protocol-change" "1" "$((RECONCILE_WAIT * 3))"
+assert_service_proxy_protocol "e2e-proxy-protocol-change" "1"
+
+echo "  --- Removing proxy-protocol restores a plain TCP forward ---"
+docker stop e2e-proxy-protocol-change >/dev/null 2>&1 || true
+docker rm e2e-proxy-protocol-change >/dev/null 2>&1 || true
+docker run -d \
+    --name e2e-proxy-protocol-change \
+    --restart no \
+    --label "docktail.service.enable=true" \
+    --label "docktail.service.name=e2e-proxy-protocol-change" \
+    --label "docktail.service.port=80" \
+    --label "docktail.service.protocol=tcp" \
+    --label "docktail.service.service-port=9001" \
+    --label "docktail.service.service-protocol=tcp" \
+    nginx:alpine >/dev/null 2>&1
+
+wait_for_proxy_protocol "e2e-proxy-protocol-change" "0" "$((RECONCILE_WAIT * 3))"
+assert_service_exists       "e2e-proxy-protocol-change"
+assert_service_protocol     "e2e-proxy-protocol-change" "tcp"
+assert_service_proxy_protocol "e2e-proxy-protocol-change" "0"
+
+echo "  --- Other PROXY-protocol services unaffected ---"
+assert_service_proxy_protocol "e2e-proxy-protocol" "2"
+assert_service_proxy_protocol "e2e-proxy-protocol-idx" "2"
+assert_service_not_exists   "e2e-proxy-protocol-http"
+
+# ==============================================================================
+# 17. Log Health
 # ==============================================================================
 
-log "16. DockTail Log Health"
+log "17. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if grep -qE "FATAL|panic" <<<"$docktail_logs"; then
