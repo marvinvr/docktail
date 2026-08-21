@@ -668,7 +668,7 @@ func (c *Client) listServices(ctx context.Context) ([]apiService, error) {
 // serviceHost describes a device that is advertising a Service, as returned by
 // the "list devices hosting a Service" API.
 type serviceHost struct {
-	StableNodeID  string `json:"stableNodeID"`
+	NodeID        string `json:"nodeId"`
 	ApprovalLevel string `json:"approvalLevel"`
 	Configured    string `json:"configured"`
 }

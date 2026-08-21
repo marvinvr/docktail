@@ -104,11 +104,14 @@ func (c *Client) ServiceControlState(ctx context.Context, serviceName string) (S
 	}
 	out.Exists = true
 	for _, h := range hosts {
-		if h.StableNodeID == "" {
+		// The Services API calls this field nodeId. It is the same stable
+		// n…CNTRL identity that `tailscale status --json` exposes as Self.ID,
+		// which lets Cloud match the advertisement to the reporting host.
+		if h.NodeID == "" {
 			continue
 		}
 		out.Hosts = append(out.Hosts, ServiceControlHost{
-			NodeID:        h.StableNodeID,
+			NodeID:        h.NodeID,
 			State:         normalizeControlState(h.ApprovalLevel, h.Configured),
 			ApprovalLevel: h.ApprovalLevel,
 			Configured:    h.Configured,

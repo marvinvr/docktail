@@ -342,11 +342,10 @@ func TestDeleteUnusedServiceDefinitionsUsesAdvertisingHosts(t *testing.T) {
 			}{Hosts: []serviceHost{}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v2/tailnet/example.com/services/"+advertisedService+"/devices":
 			hostChecks[advertisedService]++
-			_ = json.NewEncoder(w).Encode(struct {
-				Hosts []serviceHost `json:"hosts"`
-			}{
-				Hosts: []serviceHost{{StableNodeID: "node-foreign"}},
-			})
+			// Keep this as literal API-shaped JSON. Encoding serviceHost here
+			// would let a wrong struct tag change both production and the fixture
+			// together, masking the contract regression.
+			_, _ = w.Write([]byte(`{"hosts":[{"nodeId":"node-foreign"}]}`))
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/v2/tailnet/example.com/services/"+orphanService:
 			deleted = append(deleted, orphanService)
 			w.WriteHeader(http.StatusOK)

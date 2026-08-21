@@ -125,8 +125,9 @@ operator reopens enrollment in the Cloud dashboard. An agent waiting for a
 reopened window retries automatically at a low rate.
 
 The agent also reports its own Tailscale node ID and tailnet name when it has a
-tailnet. The node ID lets Cloud tell a dead agent from a dead host and match this
-host against a service's advertising devices; the tailnet name groups the hosts
-that share a control plane, so Cloud knows which single host to ask for tailnet
-health. Neither is required — without them the agent simply reports fewer
-signals.
+tailnet. The Services API calls the stable identity `nodeId`; it is the same
+identity exposed as `Self.ID` by `tailscale status --json`. Cloud uses that exact
+match to associate each service advertisement with its host. The tailnet name
+groups the hosts that share a control plane, so Cloud knows which single host to
+ask for tailnet health. Neither is required — without them the agent simply
+reports fewer signals.
