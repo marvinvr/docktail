@@ -136,11 +136,6 @@ func serviceHandler(svcConfig TailscaleService, port string, tcpConfig Tailscale
 	return "", ""
 }
 
-func serviceDestination(svcConfig TailscaleService, port string, tcpConfig TailscaleTCPConfig) string {
-	_, destination := serviceHandler(svcConfig, port, tcpConfig)
-	return destination
-}
-
 // serveAddArgs builds `tailscale serve` arguments for advertising one service.
 // --proxy-protocol is included only when the label requested a version; Tailscale
 // rejects that flag on HTTP/HTTPS, so callers must already have validated it.
