@@ -15,10 +15,15 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/marvinvr/docktail/cloud"
+	"github.com/marvinvr/docktail/diag"
 	"github.com/marvinvr/docktail/docker"
 	"github.com/marvinvr/docktail/reconciler"
 	"github.com/marvinvr/docktail/tailscale"
 )
+
+// agentVersion is set at build time (see the Dockerfile ldflags) and recorded in
+// diagnostics output so a captured log can be tied to a specific build.
+var agentVersion = "dev"
 
 func main() {
 	// Setup logging
@@ -39,6 +44,8 @@ func main() {
 	ignoreServiceNamesStr := getEnv("IGNORE_SERVICE_NAMES", "")
 	deleteUnusedServices := getEnvBool("DELETE_UNUSED_SERVICES", false)
 	skipShutdownCleanup := getEnvBool("SKIP_SHUTDOWN_CLEANUP", false)
+	exitOnSocketLoss := getEnvBool("EXIT_ON_SOCKET_LOSS", true)
+	socketLossGracePeriod := getEnvDuration("SOCKET_LOSS_GRACE_PERIOD", 90*time.Second)
 
 	// Parse default tags, dropping duplicates: the Control Plane stores tags
 	// as a set, so a duplicated default would register as permanent drift and
@@ -92,6 +99,8 @@ func main() {
 		Strs("ignore_service_names", ignoreServiceNames).
 		Bool("delete_unused_services", deleteUnusedServices).
 		Bool("skip_shutdown_cleanup", skipShutdownCleanup).
+		Bool("exit_on_socket_loss", exitOnSocketLoss).
+		Dur("socket_loss_grace_period", socketLossGracePeriod).
 		Msg("Configuration loaded")
 
 	// Create Docker client
@@ -143,6 +152,39 @@ func main() {
 				Msg("DockTail Cloud reporting enabled")
 		}
 	}
+
+	// Optional: diagnostics recorder. Inert unless DIAGNOSTICS=true. It records
+	// the half of a service's hosting state that the reconciler never reads
+	// (prefs.AdvertiseServices), which is what makes a service offline to the
+	// tailnet while DockTail's own logs look clean.
+	if diag.Enabled() {
+		recorder := diag.New(diag.LoadConfig(), tailscaleClient, agentVersion)
+		go recorder.Run(ctx)
+	}
+
+	// Watch for a tailscaled socket that stops being reachable and never comes
+	// back. This is not a transient error to retry: when the host's tailscaled
+	// restarts, systemd replaces /run/tailscale with a new directory, and a
+	// container that bind-mounts it stays pinned to the old, deleted one. The
+	// socket can then never reappear in this mount namespace, so DockTail would
+	// otherwise sit there logging errors forever while every service it manages
+	// goes stale (issue #72). Only a container restart re-resolves the mount.
+	watchdog := tailscaleClient.NewSocketWatchdog(
+		tailscale.SocketWatchdogConfig{
+			Enabled:  exitOnSocketLoss,
+			Grace:    socketLossGracePeriod,
+			Interval: 5 * time.Second,
+		},
+		func(err error, downFor time.Duration) {
+			// Exit without the usual shutdown cleanup: it would only issue more
+			// CLI calls over the socket that just went away.
+			log.Fatal().Err(err).
+				Str("socket", tailscaleSocket).
+				Dur("unreachable_for", downFor).
+				Msg("Tailscale socket has been unreachable for longer than the grace period, exiting so the container restart policy can re-resolve the mount; if this repeats, ensure DockTail is started with a restart policy and see https://docktail.org/docs/#tailscale-socket-loss")
+		},
+	)
+	go watchdog.Run(ctx)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

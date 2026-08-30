@@ -15,9 +15,15 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `DELETE_UNUSED_SERVICES` | `false` | When `true`, DockTail deletes tailnet Service definitions that no host advertises anymore. Requires API credentials. See [Cleanup Behavior](#cleanup-behavior). |
 | `SKIP_SHUTDOWN_CLEANUP` | `false` | When `true`, DockTail leaves its services and Funnels advertised on shutdown instead of draining and clearing them. This can keep ports exposed on the tailnet beyond what your current labels define; see [Cleanup Behavior](#cleanup-behavior). |
 | `LOG_LEVEL` | `info` | Logging level: `debug`, `info`, `warn`, or `error`. |
+| `DIAGNOSTICS` | `false` | When `true`, DockTail records the node's Tailscale service hosting state to a file for troubleshooting. See [Diagnostics](#diagnostics). |
+| `DIAGNOSTICS_FILE` | `/diagnostics/docktail-diagnostics.jsonl` | Where diagnostics records are appended. Mount a volume at this path to keep them. Set to an empty value to record to the log only. |
+| `DIAGNOSTICS_INTERVAL` | `10s` | How often diagnostics samples the hosting state. |
+| `DIAGNOSTICS_HEARTBEAT` | `10m` | How often a record is written even when nothing changed, so a quiet period is distinguishable from a stopped agent. |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. Rootless Docker typically uses `unix:///run/user/<uid>/docker.sock`. |
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Tailscale daemon socket. |
+| `EXIT_ON_SOCKET_LOSS` | `true` | When `true`, DockTail exits if the Tailscale socket stays unreachable past the grace period, so the container's restart policy can re-establish the mount. See [Tailscale Socket Loss](#tailscale-socket-loss). |
+| `SOCKET_LOSS_GRACE_PERIOD` | `90s` | How long the Tailscale socket may stay unreachable before DockTail exits. Must be longer than a normal `tailscaled` restart. |
 
 If both OAuth and API key credentials are configured, DockTail uses OAuth.
 
@@ -104,14 +110,119 @@ During each reconciliation, for every Service definition in the tailnet DockTail
 
 1. Keeps the Service if DockTail currently advertises it (it is backed by a running container).
 2. Keeps the Service if its name is listed in `IGNORE_SERVICE_NAMES`.
-3. Asks the Control Plane which hosts advertise the Service. If **at least one** host advertises it, DockTail keeps it.
-4. Deletes the Service only when **no** host advertises it.
+3. Asks the Control Plane which hosts are registered for the Service. If **at least one** host is registered, DockTail keeps it.
+4. Deletes the Service only when **no** host is registered for it.
 
-Because the decision is based on the tailnet-wide advertiser count, this is safe to enable on multiple DockTail instances at once: a Service advertised by any other host or instance always reports at least one host and is never deleted. DockTail also skips deletion whenever an API call fails, so it never deletes under uncertainty.
+Because the decision is based on the tailnet-wide host list, this is safe to enable on multiple DockTail instances at once: a Service hosted by any other host or instance always reports at least one host and is never deleted. DockTail also skips deletion whenever an API call fails, so it never deletes under uncertainty.
+
+> **Note:** That host list is a configuration and approval registry, not a liveness signal. A host stays listed while it is configured to host the Service, and remains listed for some time after it stops advertising it. Cleanup can therefore lag behind reality — it may keep a definition longer than expected, but it will not delete one that is still in use.
 
 This cleanup runs only during reconciliation, not during shutdown, so restarting DockTail does not delete and recreate the Services of still-running containers.
 
 > **Note:** When enabled, DockTail may also delete Service definitions it did not create if they have no advertising hosts (for example, a Service you defined in the admin console but never advertised). Add such names to `IGNORE_SERVICE_NAMES` to protect them.
+
+### Tailscale Socket Loss
+
+DockTail talks to `tailscaled` over a Unix socket that it bind-mounts from the
+host or shares with a sidecar. That mount is resolved once, when the container
+starts.
+
+This matters whenever `tailscaled` restarts. On a host install under systemd, the
+unit declares `RuntimeDirectory=tailscale` and leaves `RuntimeDirectoryPreserve`
+at its default of `no`, so systemd **removes `/run/tailscale` when the daemon
+stops and creates a new directory when it starts**. A container that mounted the
+old directory stays attached to it after it is unlinked, and the new socket never
+becomes visible inside the container. Sharing the socket through a host path with
+a sidecar that gets recreated has the same effect. Retrying cannot help: the
+socket is not late, it is in a directory this container can no longer see.
+
+An upgrade is the most common trigger, because upgrading the package restarts the
+daemon — but it is not the only one. Measured on Debian 12 (systemd 252,
+tailscale 1.102.2), an ordinary `systemctl restart tailscaled` replaces the
+directory just as an upgrade does, and so does any stop/start pair:
+
+| | directory | DockTail's mount |
+| --- | --- | --- |
+| before | inode 264, socket present | inode 264, socket present |
+| after `systemctl restart tailscaled` | inode 412, socket present | inode 264, empty |
+| after the container restarts | inode 412, socket present | inode 412, socket present |
+
+Because of this, mounting the directory rather than the socket file — which is
+what the setup guide recommends, and which does survive the socket file being
+recreated — is not on its own enough to survive a daemon restart on a
+systemd host.
+
+Without intervention DockTail would keep running in that state — process alive,
+every Tailscale call failing, and every Service it manages drifting until it goes
+offline, with no recovery until someone restarts the container by hand.
+
+So DockTail probes the socket, and if it stays unreachable for
+`SOCKET_LOSS_GRACE_PERIOD` (default `90s`) it logs the reason and exits, letting
+the container's restart policy re-create the container and with it the mount.
+
+- **Use a restart policy.** `restart: unless-stopped` (or `always`) is what turns
+  the exit into a recovery. Without one, DockTail stops instead of restarting.
+- The grace period must stay comfortably longer than a normal `tailscaled`
+  restart, which takes a second or two. Brief outages are ignored and never
+  cause an exit.
+- The check arms only after the socket has been reachable at least once, so
+  starting DockTail before `tailscaled` waits rather than exits.
+- Set `EXIT_ON_SOCKET_LOSS=false` to disable it and keep the old behaviour of
+  retrying forever.
+
+Prefer a named volume over a host path when you run `tailscaled` as a sidecar: a
+volume keeps one directory for its lifetime, so recreating the sidecar cannot
+detach DockTail's mount in the first place.
+
+### Diagnostics
+
+Diagnostics is an opt-in troubleshooting mode for the case where a Service shows
+as offline in the admin console while its container is healthy and DockTail's
+own logs look clean. It is completely inert unless `DIAGNOSTICS=true`.
+
+A node hosts a Tailscale Service only when two independent pieces of local state
+agree:
+
+1. the **serve config** carries handlers for it, and
+2. **`prefs.AdvertiseServices`** lists it.
+
+`tailscale serve status` — the command DockTail's reconciliation is based on —
+shows only the first. A service that has serve config but is not advertised
+therefore looks completely healthy to DockTail while being unreachable to the
+rest of the tailnet. Diagnostics records both halves so that state is visible.
+
+Enable it by setting `DIAGNOSTICS=true` and mounting a volume for the output:
+
+```yaml
+services:
+  docktail:
+    image: ghcr.io/marvinvr/docktail:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/tailscale:/var/run/tailscale
+      - ./docktail-diagnostics:/diagnostics
+    environment:
+      - DIAGNOSTICS=true
+```
+
+Each record is one JSON line, written when the state changes and on the
+heartbeat interval:
+
+| Field | Meaning |
+| --- | --- |
+| `reason` | `start`, `change`, `heartbeat`, `stop`, or `error`. |
+| `advertise_services` | The services this node currently advertises (`prefs.AdvertiseServices`). |
+| `services[]` | Per service: ports, backend destination, and the `configured` / `advertised` pair. |
+| `vip_fingerprint` | The exact tuple Tailscale hashes to decide whether to notify the Control Plane. The backend destination is not part of it, so re-pointing a service at a new container IP never changes it. |
+| `daemon_health` | Health warnings reported by `tailscaled` itself. |
+| `anomalies` | Services whose two halves disagree, for example configured but not advertised. |
+
+Anomalies are also logged as warnings, once when they appear and once when they
+clear, so they are visible without reading the file.
+
+The file grows on state changes and on the heartbeat, not on every sample, so it
+is safe to leave running for days. It contains service names, ports, backend
+container IPs and node IDs; it contains no credentials.
 
 ### Useful Links
 

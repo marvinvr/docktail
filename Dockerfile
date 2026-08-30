@@ -17,7 +17,7 @@ COPY . .
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
-    -ldflags "-w -s -X github.com/marvinvr/docktail/cloud.agentVersion=${VERSION}" \
+    -ldflags "-w -s -X github.com/marvinvr/docktail/cloud.agentVersion=${VERSION} -X main.agentVersion=${VERSION}" \
     -o docktail .
 
 # Tailscale binary stage — ensures CLI version matches the sidecar daemon exactly
