@@ -189,13 +189,21 @@ func buildDestination(svc *apptypes.ContainerService) string {
 	return fmt.Sprintf("%s://%s:%s", svc.Protocol, svc.IPAddress, svc.TargetPort)
 }
 
+func normalizeServicePath(path string) string {
+	if path == "" {
+		return "/"
+	}
+	return path
+}
+
 // serviceConfigChanged reports whether the advertised endpoint differs from the
-// desired container labels. Destination, Tailscale-facing protocol, and PROXY
-// protocol version are all compared so enabling, changing, or removing
-// --proxy-protocol is picked up on the next reconcile.
+// desired container labels. Path is compared only for HTTP(S), where an empty
+// desired value represents the default root handler.
 func serviceConfigChanged(current ServiceEndpoint, desired *apptypes.ContainerService) bool {
 	expectedDest := buildDestination(desired)
 	return !sameDestination(current.Destination, expectedDest) ||
 		current.Protocol != desired.ServiceProtocol ||
-		current.ProxyProtocol != desired.ProxyProtocol
+		current.ProxyProtocol != desired.ProxyProtocol ||
+		((desired.ServiceProtocol == "http" || desired.ServiceProtocol == "https") &&
+			normalizeServicePath(current.Path) != normalizeServicePath(desired.ServicePath))
 }

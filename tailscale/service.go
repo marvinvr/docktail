@@ -69,7 +69,7 @@ func parseManagedServices(status TailscaleStatus) map[string]ServiceEndpoint {
 		// Parse TCP config to get port, protocol and destination
 		for port, tcpConfig := range svcConfig.TCP {
 			protocol := serviceProtocol(tcpConfig)
-			destination := serviceDestination(svcConfig, port, tcpConfig)
+			path, destination := serviceHandler(svcConfig, port, tcpConfig)
 
 			// Create a unique key for this service+port combination
 			key := fmt.Sprintf("%s:%s", serviceName, port)
@@ -78,6 +78,7 @@ func parseManagedServices(status TailscaleStatus) map[string]ServiceEndpoint {
 				ServiceName:   serviceName,
 				Port:          port,
 				Protocol:      protocol,
+				Path:          path,
 				Destination:   destination,
 				ProxyProtocol: tcpConfig.ProxyProtocol,
 			}
@@ -86,6 +87,7 @@ func parseManagedServices(status TailscaleStatus) map[string]ServiceEndpoint {
 				Str("service", serviceName).
 				Str("port", port).
 				Str("protocol", protocol).
+				Str("path", path).
 				Str("destination", destination).
 				Msg("Parsed existing service")
 		}
@@ -114,24 +116,29 @@ func serviceProtocol(tcpConfig TailscaleTCPConfig) string {
 // the destination was only read from the Web section, which is empty for plain
 // TCP services; that left their destination empty and made reconciliation treat
 // every TCP service as changed, re-adding it on each cycle (issue #56).
-func serviceDestination(svcConfig TailscaleService, port string, tcpConfig TailscaleTCPConfig) string {
+func serviceHandler(svcConfig TailscaleService, port string, tcpConfig TailscaleTCPConfig) (string, string) {
 	if !tcpConfig.HTTP && !tcpConfig.HTTPS {
-		return tcpConfig.TCPForward
+		return "", tcpConfig.TCPForward
 	}
 
 	for webKey, webConfig := range svcConfig.Web {
 		// Find the matching port in the web key
 		if strings.Contains(webKey, ":"+port) {
-			for _, handler := range webConfig.Handlers {
+			for path, handler := range webConfig.Handlers {
 				if handler.Proxy != "" {
-					return handler.Proxy
+					return path, handler.Proxy
 				}
 			}
 			break
 		}
 	}
 
-	return ""
+	return "", ""
+}
+
+func serviceDestination(svcConfig TailscaleService, port string, tcpConfig TailscaleTCPConfig) string {
+	_, destination := serviceHandler(svcConfig, port, tcpConfig)
+	return destination
 }
 
 // serveAddArgs builds `tailscale serve` arguments for advertising one service.
@@ -163,6 +170,9 @@ func serveAddArgs(svc *apptypes.ContainerService) ([]string, error) {
 	if svc.ProxyProtocol != 0 {
 		args = append(args, fmt.Sprintf("--proxy-protocol=%d", svc.ProxyProtocol))
 	}
+	if svc.ServiceProtocol == "http" || svc.ServiceProtocol == "https" {
+		args = append(args, fmt.Sprintf("--set-path=%s", normalizeServicePath(svc.ServicePath)))
+	}
 	args = append(args, destination)
 	return args, nil
 }
@@ -187,6 +197,7 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 		Str("service_port", svc.Port).
 		Str("backend_protocol", svc.Protocol).
 		Int("proxy_protocol", svc.ProxyProtocol).
+		Str("service_path", svc.ServicePath).
 		Str("destination", destination).
 		Msg("Executing tailscale serve command")
 
@@ -254,6 +265,35 @@ func (c *Client) addService(ctx context.Context, svc *apptypes.ContainerService)
 		Msg("Service added successfully")
 
 	return nil
+}
+
+// removeServicePath removes one HTTP(S) handler before a path change. A serve
+// invocation adds or updates a mount point but does not remove the previous
+// one, so the original flags must be replayed with "off".
+func (c *Client) removeServicePath(ctx context.Context, svc ServiceEndpoint) error {
+	args, err := serveRemovePathArgs(svc)
+	if err != nil {
+		return err
+	}
+	cmd := c.tailscaleCmd(ctx, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to remove old service path: %w\nOutput: %s", err, string(output))
+	}
+	return nil
+}
+
+func serveRemovePathArgs(svc ServiceEndpoint) ([]string, error) {
+	if svc.Protocol != "http" && svc.Protocol != "https" {
+		return nil, fmt.Errorf("service path is unsupported for protocol %s", svc.Protocol)
+	}
+	return []string{
+		"serve",
+		fmt.Sprintf("--service=%s", svc.ServiceName),
+		fmt.Sprintf("--%s=%s", svc.Protocol, svc.Port),
+		fmt.Sprintf("--set-path=%s", normalizeServicePath(svc.Path)),
+		"off",
+	}, nil
 }
 
 // clearServiceOnly clears a service configuration without draining

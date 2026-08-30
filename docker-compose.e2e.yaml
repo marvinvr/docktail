@@ -65,6 +65,7 @@ services:
       - "docktail.service.protocol=http"
       - "docktail.service.service-port=80"
       - "docktail.service.service-protocol=http"
+      - "docktail.service.path=/api"
 
   # HTTPS service protocol
   test-proto-https:

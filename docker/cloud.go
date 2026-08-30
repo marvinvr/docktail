@@ -293,6 +293,14 @@ func cloudServiceFromLabels(id, fullID, containerName string, labels map[string]
 			servicePort = targetPort
 		}
 	}
+	servicePathLabel, hasServicePath := labels[prefix+"path"]
+	if prefix == "" {
+		servicePathLabel, hasServicePath = labels[apptypes.LabelServicePath]
+	}
+	servicePath, pathErr := parseServicePath(servicePathLabel, hasServicePath, serviceProtocol)
+	if pathErr != nil {
+		servicePath = ""
+	}
 
 	return &apptypes.ContainerService{
 		ContainerID:     id,
@@ -302,6 +310,7 @@ func cloudServiceFromLabels(id, fullID, containerName string, labels map[string]
 		Port:            servicePort,
 		TargetPort:      targetPort,
 		ServiceProtocol: serviceProtocol,
+		ServicePath:     servicePath,
 		Protocol:        protocol,
 		Tags:            tags,
 	}

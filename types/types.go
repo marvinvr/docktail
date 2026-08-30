@@ -10,6 +10,7 @@ type ContainerService struct {
 	Port               string   // Tailscale service port (e.g., "443")
 	TargetPort         string   // Container/host port to proxy to (e.g., "9080")
 	ServiceProtocol    string   // Protocol Tailscale uses (e.g., "https", "http", "tcp")
+	ServicePath        string   // HTTP(S) Serve path (for example "/" or "/api")
 	Protocol           string   // Protocol the container speaks (e.g., "http", "https", "tcp")
 	Tags               []string // Tailscale service tags (e.g., ["tag:container", "tag:web"])
 	IPAddress          string
@@ -55,6 +56,7 @@ const (
 	LabelDescription      = "docktail.service.description"
 	LabelPort             = "docktail.service.service-port"
 	LabelServiceProtocol  = "docktail.service.service-protocol"
+	LabelServicePath      = "docktail.service.path"
 	LabelTarget           = "docktail.service.port"
 	LabelTargetProtocol   = "docktail.service.protocol"
 	LabelProxyProtocol    = "docktail.service.proxy-protocol"

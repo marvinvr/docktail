@@ -307,6 +307,17 @@ assert_service_destination_contains() {
     fi
 }
 
+# Check the configured HTTP(S) handler path.
+assert_service_path() {
+    local name="svc:$1"
+    local expected_path="$2"
+    if echo "$SERVE_STATUS_CACHE" | jq -e --arg name "$name" --arg path "$expected_path" '.Services[$name].Web[].Handlers[$path].Proxy? | strings | select(length > 0)' >/dev/null 2>&1; then
+        pass "$name serves path $expected_path"
+    else
+        fail "$name path $expected_path not found"
+    fi
+}
+
 # Check funnel status
 get_funnel_status() {
     docker exec "$TS_CONTAINER" tailscale funnel status --json 2>/dev/null || echo "{}"
@@ -535,6 +546,7 @@ assert_service_exists       "e2e-proto-http"
 assert_service_port         "e2e-proto-http" "80"
 assert_service_protocol     "e2e-proto-http" "http"
 assert_service_destination_contains "e2e-proto-http" "http://"
+assert_service_path         "e2e-proto-http" "/api"
 
 echo "  --- HTTPS ---"
 assert_service_exists       "e2e-proto-https"

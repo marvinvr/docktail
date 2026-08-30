@@ -59,6 +59,8 @@ Tailscale-facing `docktail.service.service-protocol` values:
 | `tcp` | Layer 4 TCP. |
 | `tls-terminated-tcp` | Layer 4 TCP; Tailscale terminates incoming TLS and forwards decrypted TCP to the backend. |
 
+`docktail.service.path` selects the HTTP(S) Serve mount point and defaults to `/`. It must start with `/` and is rejected for TCP protocols.
+
 `docktail.service.proxy-protocol` (`1` or `2`) is valid only with `tcp` or `tls-terminated-tcp`. It is off by default because the backend must understand the PROXY header. HTTP/HTTPS values are rejected.
 
 Container-facing `docktail.service.protocol` values:

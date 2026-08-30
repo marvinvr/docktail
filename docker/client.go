@@ -253,6 +253,27 @@ func parseProxyProtocol(value, serviceProtocol string) (int, error) {
 	}
 }
 
+// parseServicePath validates docktail.service.path. HTTP/HTTPS services use
+// the root handler by default. TCP forwarding has no URL handler, so declaring
+// a path there is an error rather than a silently ignored label.
+func parseServicePath(rawPath string, declared bool, serviceProtocol string) (string, error) {
+	if declared && serviceProtocol != "http" && serviceProtocol != "https" {
+		return "", fmt.Errorf("%s is only supported for HTTP/HTTPS services", apptypes.LabelServicePath)
+	}
+	if serviceProtocol != "http" && serviceProtocol != "https" {
+		return "", nil
+	}
+
+	path := strings.TrimSpace(rawPath)
+	if path == "" {
+		return "/", nil
+	}
+	if !strings.HasPrefix(path, "/") {
+		return "", fmt.Errorf("invalid service path: %s (must start with /)", rawPath)
+	}
+	return path, nil
+}
+
 // resolveDestPort determines the destination IP and port based on networking mode.
 // Returns (destIP, destPort, error).
 func (c *Client) resolveDestPort(cctx *containerCtx, targetPort string) (string, string, error) {
@@ -787,6 +808,11 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 		if err != nil {
 			return nil, err
 		}
+		servicePathLabel, hasServicePath := labels[apptypes.LabelServicePath]
+		servicePath, err := parseServicePath(servicePathLabel, hasServicePath, serviceProtocol)
+		if err != nil {
+			return nil, err
+		}
 
 		primary := &apptypes.ContainerService{
 			ContainerID:        cctx.containerID[:12],
@@ -797,6 +823,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 			Port:               port,
 			TargetPort:         destPort,
 			ServiceProtocol:    serviceProtocol,
+			ServicePath:        servicePath,
 			Protocol:           protocol,
 			ProxyProtocol:      proxyProtocol,
 			Tags:               cctx.tags,
@@ -937,6 +964,17 @@ func (c *Client) parseIndexedPorts(
 				Msg("Invalid proxy-protocol for indexed service, skipping")
 			continue
 		}
+		idxServicePathLabel, hasIdxServicePath := labels[prefix+"path"]
+		idxServicePath, err := parseServicePath(idxServicePathLabel, hasIdxServicePath, serviceProtocol)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("container", cctx.containerName).
+				Str("service", idxServiceName).
+				Int("index", idx).
+				Msg("Invalid path for indexed service, skipping")
+			continue
+		}
 
 		// Check for duplicate service name + port combo
 		dedupKey := idxServiceName + ":" + servicePort
@@ -982,6 +1020,7 @@ func (c *Client) parseIndexedPorts(
 			Port:               servicePort,
 			TargetPort:         idxDestPort,
 			ServiceProtocol:    serviceProtocol,
+			ServicePath:        idxServicePath,
 			Protocol:           protocol,
 			ProxyProtocol:      idxProxyProtocol,
 			Tags:               cctx.tags,

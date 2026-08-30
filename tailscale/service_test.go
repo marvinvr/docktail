@@ -284,6 +284,9 @@ func TestParseManagedServicesDestinations(t *testing.T) {
 	if web.Destination != "http://172.17.0.2:8080" {
 		t.Errorf("svc:web destination = %q, want http://172.17.0.2:8080", web.Destination)
 	}
+	if web.Path != "/" {
+		t.Errorf("svc:web path = %q, want /", web.Path)
+	}
 
 	db, ok := got["svc:db:5432"]
 	if !ok {
@@ -370,7 +373,19 @@ func TestServeAddArgs(t *testing.T) {
 				svc.ServiceProtocol = "https"
 				svc.TargetPort = "3000"
 			},
-			want: []string{"serve", "--service=svc:api", "--https=443", "http://172.17.0.5:3000"},
+			want: []string{"serve", "--service=svc:api", "--https=443", "--set-path=/", "http://172.17.0.5:3000"},
+		},
+		{
+			name: "http with custom path",
+			mutate: func(svc *apptypes.ContainerService) {
+				svc.ServiceName = "api"
+				svc.Port = "80"
+				svc.Protocol = "http"
+				svc.ServiceProtocol = "http"
+				svc.ServicePath = "/api"
+				svc.TargetPort = "3000"
+			},
+			want: []string{"serve", "--service=svc:api", "--http=80", "--set-path=/api", "http://172.17.0.5:3000"},
 		},
 		{
 			name: "unsupported protocol",
@@ -406,6 +421,27 @@ func TestServeAddArgs(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestServeRemovePathArgs(t *testing.T) {
+	got, err := serveRemovePathArgs(ServiceEndpoint{
+		ServiceName: "svc:api",
+		Port:        "443",
+		Protocol:    "https",
+		Path:        "/old",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []string{"serve", "--service=svc:api", "--https=443", "--set-path=/old", "off"}
+	if len(got) != len(want) {
+		t.Fatalf("serveRemovePathArgs() = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("serveRemovePathArgs() = %#v, want %#v", got, want)
+		}
 	}
 }
 
@@ -451,6 +487,23 @@ func TestServiceConfigChanged(t *testing.T) {
 	current.ProxyProtocol = 0
 	if serviceConfigChanged(current, desired) {
 		t.Fatal("matching config without proxy-protocol should not look changed")
+	}
+
+	desired.Protocol = "http"
+	desired.ServiceProtocol = "https"
+	desired.ServicePath = "/api"
+	desired.Port = "443"
+	desired.TargetPort = "3000"
+	current.Protocol = "https"
+	current.Path = "/"
+	current.Port = "443"
+	current.Destination = "http://172.17.0.5:3000"
+	if !serviceConfigChanged(current, desired) {
+		t.Fatal("changing service path should be detected as a change")
+	}
+	current.Path = "/api"
+	if serviceConfigChanged(current, desired) {
+		t.Fatal("matching service path should not look changed")
 	}
 }
 

@@ -126,6 +126,7 @@ type ServiceEndpoint struct {
 	ServiceName   string // e.g., "svc:web"
 	Port          string // e.g., "443"
 	Protocol      string // e.g., "http", "https", "tcp"
+	Path          string // HTTP(S) handler path, empty for TCP
 	Destination   string // e.g., "http://localhost:9080"
 	ProxyProtocol int    // 0, 1, or 2 as reported by `tailscale serve status`
 }
@@ -202,6 +203,7 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	// Track what we need to add and remove
 	toAdd := make(map[string]*apptypes.ContainerService)
 	toRemove := make(map[string]ServiceEndpoint)
+	pathsToRemove := make(map[string]ServiceEndpoint)
 
 	// Find services to add (in desired but not in current, or changed)
 	for key, desired := range desiredMap {
@@ -216,6 +218,10 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 			// Service exists - check if configuration changed
 			if serviceConfigChanged(current, desired) {
 				toAdd[key] = desired
+				if (current.Protocol == "http" || current.Protocol == "https") &&
+					normalizeServicePath(current.Path) != normalizeServicePath(desired.ServicePath) {
+					pathsToRemove[key] = current
+				}
 				log.Info().
 					Str("key", key).
 					Str("service", desired.ServiceName).
@@ -223,6 +229,8 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 					Str("expected_dest", buildDestination(desired)).
 					Str("current_protocol", current.Protocol).
 					Str("expected_protocol", desired.ServiceProtocol).
+					Str("current_path", current.Path).
+					Str("expected_path", desired.ServicePath).
 					Int("current_proxy_protocol", current.ProxyProtocol).
 					Int("expected_proxy_protocol", desired.ProxyProtocol).
 					Msg("Service configuration changed, will update")
@@ -283,6 +291,17 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	failCount := 0
 
 	for key, svc := range toAdd {
+		if current, ok := pathsToRemove[key]; ok {
+			if err := c.removeServicePath(ctx, current); err != nil {
+				failCount++
+				log.Error().
+					Err(err).
+					Str("service", current.ServiceName).
+					Str("path", current.Path).
+					Msg("Failed to remove old service path")
+				continue
+			}
+		}
 		log.Info().
 			Str("container", svc.ContainerName).
 			Str("service", svc.ServiceName).
