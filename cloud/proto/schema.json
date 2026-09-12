@@ -63,6 +63,7 @@
         "funnel_port": { "type": "string" },
         "funnel_protocol": { "type": "string" },
         "funnel_path": { "type": "string" },
+        "funnel_hostname": { "type": "string", "description": "public MagicDNS name the Funnel answers on, e.g. box.tail1234.ts.net" },
         "state": { "type": "string" },
         "docker_health": { "type": "string" },
         "restart_count": { "type": "integer" },
