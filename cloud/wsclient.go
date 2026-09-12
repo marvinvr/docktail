@@ -201,7 +201,9 @@ func (c *wsConn) writePump(ctx context.Context) {
 }
 
 // sendFrame queues a pre-encoded envelope. Non-blocking: drops if the queue is
-// full (metadata is best-effort). Returns false if the connection is closed.
+// full (periodic metadata is best-effort — the next tick replaces it). Returns
+// false if the connection is closed or the frame was dropped, which is what lets
+// Collector.sendOrSpool keep a failure signal instead of losing it.
 func (c *wsConn) sendFrame(env []byte) bool {
 	select {
 	case <-c.closed:
@@ -215,6 +217,29 @@ func (c *wsConn) sendFrame(env []byte) bool {
 		return false
 	default:
 		c.log.Warn().Msg("cloud: send queue full, dropping frame")
+		return false
+	}
+}
+
+// sendFrameWait queues a pre-encoded envelope, waiting up to d for room in the
+// send queue. Replay uses it instead of sendFrame: a spooled backlog is deeper
+// than the queue, so dropping on a full queue would defeat the point of having
+// kept the frames at all. Returns false if the connection closes or the wait
+// expires, which tells the caller to put the frame back in the spool.
+func (c *wsConn) sendFrameWait(env []byte, d time.Duration) bool {
+	select {
+	case <-c.closed:
+		return false
+	default:
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case c.send <- env:
+		return true
+	case <-c.closed:
+		return false
+	case <-timer.C:
 		return false
 	}
 }
