@@ -67,6 +67,7 @@ When enabled, the agent reports the following operational data:
 - Docker failure events, including container exit codes, out-of-memory (OOM) kills, health-status changes, and restart loops.
 - Local-vantage check results. Checks default to TCP; cloud-managed config may select HTTP, a relative path, and expected status, but the destination always comes from the agent's local service discovery.
 - Tailscale control-plane service state, when Cloud asks for it (see [Tailnet Health](#tailnet-health)).
+- For a Funnel-exposed service, this node's MagicDNS name — the public address its Funnel answers on (see [Public Health](#public-health)).
 - Bounded incident log excerpts. Cloud enables this by default and you can turn it off for the whole workspace or for an individual service; the agent captures nothing while the mode is off. Before sending, the agent best-effort redacts common Authorization/Bearer credentials, passwords, tokens, API keys, credential URLs, JWTs, and private-key blocks, then applies the 40-line/8-KiB caps. Redaction cannot recognize every application-specific secret, so turn capture off if your logs carry secrets those patterns will not match.
 
 ### What It Never Does
@@ -99,7 +100,7 @@ This is an approval and advertisement oracle, not a reachability ping. Tailscale
 exposes no health or liveness probe for a service, so a service Cloud reports as
 `connected` is one the control plane considers advertised and approved — nothing
 more. Actual reachability still comes from the local vantage and, for Funnel
-services, the public one.
+services, the public one below.
 
 Cloud drives the polling: it asks exactly one credentialed host per tailnet on a
 slow cadence (service state changes when a human approves something), and that
@@ -107,6 +108,23 @@ answer covers every host on the tailnet. Agents never poll on their own, and eac
 agent enforces its own minimum interval of 60 seconds between control-plane
 reads, re-serving its previous answer if asked sooner — your Tailscale API quota
 is yours, and nothing on the Cloud side can spend more of it than that.
+
+### Public Health
+
+For a service with Funnel enabled, Cloud makes an ordinary HTTPS request to its
+public Funnel address from the open internet and reports whether it answered.
+That is the one check the agent cannot run for you: from inside the tailnet,
+MagicDNS resolves a Funnel name to a tailnet address, so a request from this host
+takes the tailnet path and always succeeds. Only an observer outside your tailnet
+sees what a visitor sees.
+
+The agent's part is to say *where* — it reports this node's MagicDNS name
+alongside the Funnel port and path it configured, so Cloud requests exactly the
+URL you published instead of guessing one. Nothing else is sent, no credential is
+involved, and a service without Funnel enabled is never requested at all. HTTP
+and HTTPS funnels are checked; a `tcp` or `tls-terminated-tcp` funnel is not,
+because Tailscale's ingress accepts the connection itself and such a check would
+report healthy even with the host gone.
 
 Without credentials the agent still says so explicitly: its hello advertises that
 it understands tailnet health but has no credentials for it, so Cloud reports "no

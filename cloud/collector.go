@@ -58,6 +58,7 @@ type Collector struct {
 	cfgVer       int
 	unmonitored  bool      // cloud reports this host inactive/past the plan cap; throttle output
 	lastTeaser   time.Time // last throttled teaser snapshot sent while unmonitored
+	selfDNSName  string    // this node's MagicDNS name — where its Funnel answers publicly
 
 	probeMu     sync.Mutex                 // serializes control-plane probes; guards probedAt + probeReport
 	probedAt    time.Time                  // last Tailscale control-plane read, for the agent-side minimum interval
@@ -196,6 +197,9 @@ func (c *Collector) buildServices(ctx context.Context, services []*apptypes.Cont
 		stats containerStats
 	}
 	cache := make(map[string]enriched)
+	// Read once per snapshot, not once per service: it is the same node for all
+	// of them, and toService stays a pure mapping.
+	funnelHost := c.funnelHostname()
 	out := make([]proto.Service, 0, len(services))
 	for _, cs := range services {
 		if cs == nil {
@@ -209,7 +213,7 @@ func (c *Collector) buildServices(ctx context.Context, services []*apptypes.Cont
 			e.stats = c.sampleStats(ctx, cs.ContainerID, e.info.State)
 			cache[cs.ContainerID] = e
 		}
-		out = append(out, toService(cs, e.info, e.stats))
+		out = append(out, toService(cs, e.info, e.stats, funnelHost))
 	}
 	present := make(map[string]struct{}, len(cache))
 	for id := range cache {
@@ -290,8 +294,11 @@ func (c *Collector) pruneStatsMap(present map[string]struct{}, prevCPU map[strin
 // toService maps a reconciler ContainerService + docker enrichment onto the wire
 // Service. FQDN is left empty: the tailnet vantage comes from the Tailscale
 // control plane keyed by service name (see tailnet.go), so the cloud does not
-// need the MagicDNS domain to classify it.
-func toService(cs *apptypes.ContainerService, info docker.CloudInfo, stats containerStats) proto.Service {
+// need the MagicDNS domain to classify it. funnelHost is this node's MagicDNS
+// name, which IS needed for a funnelled service — it is where the exposure
+// answers on the public internet, and the cloud's public vantage has no other
+// way to know.
+func toService(cs *apptypes.ContainerService, info docker.CloudInfo, stats containerStats, funnelHost string) proto.Service {
 	svc := proto.Service{
 		Key:            serviceKeyForContainerService(cs),
 		ServiceName:    cs.ServiceName,
@@ -322,6 +329,11 @@ func toService(cs *apptypes.ContainerService, info docker.CloudInfo, stats conta
 		svc.FunnelPort = firstNonEmpty(cs.FunnelFunnelPort, cs.FunnelPort)
 		svc.FunnelProtocol = cs.FunnelProtocol
 		svc.FunnelPath = cs.FunnelPath
+		// Funnel serves on the NODE's MagicDNS name, so this is the one piece of
+		// the public URL the cloud cannot work out for itself. Empty when we have
+		// no name to give (no tailnet yet); the cloud then probes nothing rather
+		// than guessing a destination.
+		svc.FunnelHostname = funnelHost
 	}
 	return svc
 }
@@ -973,6 +985,11 @@ func (c *Collector) sendHello(ctx context.Context, conn *wsConn) bool {
 	if c.tailnet != nil && c.tailnet.APIEnabled() {
 		caps = append(caps, proto.CapTailnetControlAPI)
 	}
+	// Unconditional version marker: "this agent reports where its funnels answer".
+	// The cloud needs it to tell a node with no MagicDNS name yet from an agent
+	// too old to have the field, so it says "your node isn't logged in" instead
+	// of "upgrade your agent".
+	caps = append(caps, proto.CapFunnelHostname)
 	nodeID, tailnet := c.tailnetIdentity(ctx)
 	hello := proto.Hello{
 		ProtocolVersion: proto.ProtocolVersion,

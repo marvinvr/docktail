@@ -268,7 +268,31 @@ func (c *Collector) tailnetIdentity(ctx context.Context) (nodeID, tailnet string
 	if err != nil || st == nil {
 		return "", ""
 	}
+	c.setSelfDNSName(st.SelfDNSName)
 	return st.SelfNodeID, st.Tailnet
+}
+
+// funnelHostname is this node's MagicDNS name as last read from the local
+// daemon, or "" when there is none. It is read on the snapshot path, so it is
+// cached rather than shelled out per service: the name changes about as
+// often as the machine is renamed, and the heartbeat-cadence netmap read already
+// refreshes it.
+func (c *Collector) funnelHostname() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.selfDNSName
+}
+
+// setSelfDNSName records a name the daemon actually reported. An empty read is
+// ignored rather than stored: a momentarily unreachable daemon should not blank
+// out a perfectly good funnel destination and make the cloud stop probing.
+func (c *Collector) setSelfDNSName(name string) {
+	if name == "" {
+		return
+	}
+	c.mu.Lock()
+	c.selfDNSName = name
+	c.mu.Unlock()
 }
 
 // tailnetLoop reports the host's local-netmap peer liveness on the heartbeat
@@ -304,6 +328,9 @@ func (c *Collector) sampleAndSendTailnet(ctx context.Context, conn *wsConn) {
 	if err != nil || st == nil {
 		return // no tailnet → nothing to report
 	}
+	// Same read, second use: keep the funnel destination fresh on the heartbeat
+	// cadence so a node that only just got its MagicDNS name starts reporting one.
+	c.setSelfDNSName(st.SelfDNSName)
 	peers := make([]proto.TailnetPeer, 0, len(st.Peers))
 	for _, p := range st.Peers {
 		if p.NodeID == "" {

@@ -129,11 +129,20 @@ type Service struct {
 	Tags         []string `json:"tags,omitempty"`
 	Networks     []string `json:"networks,omitempty"`
 
-	// Funnel (public internet exposure).
+	// Funnel (public internet exposure). FunnelPort is the PUBLIC port Tailscale
+	// listens on (443/8443/10000), not the container port behind it.
+	//
+	// FunnelHostname is this node's public MagicDNS name — the host part of the
+	// URL the funnel actually answers on, e.g. "box.tail1234.ts.net". It is the
+	// agent telling the cloud where its own exposure lives; the cloud never
+	// derives or guesses it, and probes nothing without it. Empty ⇒ the agent
+	// could not read the name (no tailnet yet), or predates the field, and the
+	// public vantage stays not_configured. See [CapFunnelHostname].
 	FunnelEnabled  bool   `json:"funnel_enabled"`
 	FunnelPort     string `json:"funnel_port,omitempty"`
 	FunnelProtocol string `json:"funnel_protocol,omitempty"`
 	FunnelPath     string `json:"funnel_path,omitempty"`
+	FunnelHostname string `json:"funnel_hostname,omitempty"`
 
 	// Runtime status from docker.
 	State        string `json:"state"`                   // running/exited/restarting/paused/created
@@ -514,7 +523,7 @@ const (
 const (
 	VantageLocal   = "local"   // agent -> container IP
 	VantageTailnet = "tailnet" // Tailscale control plane: is the service advertised and approved?
-	VantagePublic  = "public"  // plain HTTP probe for Funnel services
+	VantagePublic  = "public"  // cloud -> Funnel HTTPS probe: is the exposure reachable from the internet?
 )
 
 // Probe failure classifications. The classification is the product: "why", not
@@ -535,10 +544,53 @@ const (
 	ClassMisconfigured  = "misconfigured"   // the control plane has the host but its service config is invalid/incomplete
 	ClassServiceMissing = "service_missing" // no such service definition in the tailnet at all
 
+	// Public-vantage classes. The cloud produces these from its own HTTPS probe of
+	// a Funnel exposure (see docs/public-vantage.md). They are namespaced rather
+	// than reusing the transport classes above because the classification is also
+	// the incident's, and a bare `timeout` could not say WHICH layer timed out:
+	// the recovery rules ask "is this outage currently explained by the public
+	// vantage?" and must never mistake a local probe failure for a Funnel one.
+	ClassPublicDNS     = "public_dns"      // the funnel hostname does not resolve to a public address
+	ClassPublicTimeout = "public_timeout"  // no answer from the funnel within the probe budget
+	ClassPublicRefused = "public_refused"  // the funnel ingress refused the connection
+	ClassPublicTLS     = "public_tls"      // TLS handshake/certificate failure at the funnel
+	ClassPublicHTTP5xx = "public_http_5xx" // reachable, but the exposure answered 5xx
+
 	// Deprecated: ClassServe was emitted by the removed `tailscale serve` vantage.
 	// Recognized so pre-existing incidents and stored rows still render; never
 	// produced. See docs/prober.md.
 	ClassServe = "serve"
+)
+
+// Reasons the public vantage has nothing to say about a service — stored on the
+// public service_status row so the UI can explain an empty cell instead of
+// showing a phantom verdict. They are the public counterpart of the
+// ControlUnavail* codes, and like those they name the fix rather than the fault.
+const (
+	// PublicUnavailNotFunneled is the common case: the service is not exposed to
+	// the public internet at all, so there is nothing to probe.
+	PublicUnavailNotFunneled = "not_funneled"
+	// PublicUnavailAgentOutdated marks a funnelled service on a host whose agent
+	// predates [CapFunnelHostname] — it never reports where its funnel answers,
+	// so the cloud has no destination. Upgrade the agent.
+	PublicUnavailAgentOutdated = "agent_outdated"
+	// PublicUnavailNoHostname marks a current agent that reported no funnel
+	// hostname: the node has no MagicDNS name yet (not logged in, MagicDNS off).
+	PublicUnavailNoHostname = "no_hostname"
+	// PublicUnavailUnsupportedProtocol marks a `tcp`/`tls-terminated-tcp` funnel.
+	// Tailscale's public ingress accepts the TCP connection itself, so a connect
+	// test would read healthy with the node gone — a check that cannot fail is
+	// worse than no check. Only HTTP(S) funnels are probed.
+	PublicUnavailUnsupportedProtocol = "unsupported_protocol"
+	// PublicUnavailUnsupportedTarget marks a funnel the cloud refuses to probe
+	// because the reported destination is not a public Tailscale funnel endpoint
+	// (a non-`ts.net` hostname, or a funnel port Tailscale never serves).
+	PublicUnavailUnsupportedTarget = "unsupported_target"
+	// PublicUnavailDisabled marks a deployment that switched the vantage off
+	// (PUBLIC_PROBE_INTERVAL_MS=0, e.g. no outbound egress). Written once at boot
+	// so a verdict from before the switch cannot outlive the thing that produced
+	// it; the next boot with probing enabled reverses it.
+	PublicUnavailDisabled = "probe_disabled"
 )
 
 // Tailnet control-plane service states, as normalized by the agent from the
@@ -579,6 +631,15 @@ const (
 	// it, so an agent is never asked a question it cannot answer.
 	CapTailnetControlAPI = "tailnet_control_api"
 )
+
+// CapFunnelHostname means the agent reports [Service.FunnelHostname] — where its
+// Funnel exposure actually answers on the public internet. It is a pure version
+// marker, advertised whether or not any service is funnelled, and it exists for
+// the same reason the tailnet capability is split in two: without it a funnelled
+// service with no hostname would be indistinguishable from an agent too old to
+// have the field, and the UI would tell an operator with a current agent to
+// upgrade it. See [PublicUnavailAgentOutdated] / [PublicUnavailNoHostname].
+const CapFunnelHostname = "funnel_hostname"
 
 // Reasons a [TailnetControlReport] carries Available=false. The cloud surfaces
 // these verbatim so the UI can tell the operator what to fix rather than showing
