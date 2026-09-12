@@ -286,6 +286,19 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		}
 	}
 
+	// Sync Service definitions to the Control Plane (API) before advertising
+	// anything new. Tailscale's documented order is: define the Service, then
+	// configure and advertise a host for it. Advertising first leaves the node
+	// listed in prefs.AdvertiseServices for a Service the control plane does not
+	// know yet, and the host then stays at "0 hosts" until the node's Service
+	// set changes again for an unrelated reason (issue #72). Failures are
+	// non-blocking: local serving must not depend on the API being reachable.
+	if c.apiSyncEnabled {
+		if err := c.syncServiceDefinitions(ctx, desiredServices); err != nil {
+			log.Error().Err(err).Msg("Failed to sync service definitions to Tailscale API")
+		}
+	}
+
 	// Add new services
 	successCount := 0
 	failCount := 0
@@ -346,22 +359,12 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		return fmt.Errorf("funnel reconciliation failed: %w", err)
 	}
 
-	// Sync Service Definitions to Control Plane (API)
-	// This is done after local serve commands to ensure local state is consistent first,
-	// but failures here are non-blocking for the local advertisement.
-	if c.apiSyncEnabled {
-		if err := c.syncServiceDefinitions(ctx, desiredServices); err != nil {
-			// Log error but do NOT return it - we don't want API failures to break local serving
-			log.Error().Err(err).Msg("Failed to sync service definitions to Tailscale API")
-		}
-
-		// Optionally delete tailnet Service definitions no host advertises anymore.
-		// Runs after syncing so freshly created services are already in the desired
-		// set and therefore excluded. Failures are non-blocking.
-		if c.deleteUnusedServices {
-			if err := c.deleteUnusedServiceDefinitions(ctx, desiredServices); err != nil {
-				log.Error().Err(err).Msg("Failed to delete unused service definitions")
-			}
+	// Optionally delete tailnet Service definitions no host is registered for.
+	// This stays after local serve reconciliation so the desired set, which was
+	// synced above, is complete and protected. Failures are non-blocking.
+	if c.apiSyncEnabled && c.deleteUnusedServices {
+		if err := c.deleteUnusedServiceDefinitions(ctx, desiredServices); err != nil {
+			log.Error().Err(err).Msg("Failed to delete unused service definitions")
 		}
 	}
 
@@ -764,9 +767,13 @@ func (c *Client) deleteService(ctx context.Context, serviceName string) error {
 //     also protects a Service created earlier in this same reconcile cycle before
 //     its advertising host has propagated to the Control Plane.
 //   - Services listed in IGNORE_SERVICE_NAMES are never touched.
-//   - A Service is deleted only when the Control Plane reports zero hosts advertising
-//     it. A Service advertised by any other node/instance reports at least one host
-//     and is left alone.
+//   - A Service is deleted only when the Control Plane reports zero hosts for it.
+//     Note that this endpoint is a configuration/approval registry rather than a
+//     liveness signal: a host stays listed while it is merely configured to host
+//     the Service, and keeps being listed for a while after it stops advertising
+//     it. That makes the check conservative in the safe direction — it can delay
+//     a deletion, never cause a premature one — but it is not a check for "some
+//     host is currently advertising this".
 //   - Any API error while listing services or hosts aborts deletion for that Service;
 //     DockTail never deletes under uncertainty.
 func (c *Client) deleteUnusedServiceDefinitions(ctx context.Context, desiredServices []*apptypes.ContainerService) error {
@@ -819,13 +826,13 @@ func (c *Client) deleteUnusedServiceDefinitions(ctx context.Context, desiredServ
 			log.Debug().
 				Str("service", name).
 				Int("host_count", len(hosts)).
-				Msg("Service still advertised by at least one host, keeping")
+				Msg("Service still has hosts registered, keeping")
 			continue
 		}
 
 		log.Info().
 			Str("service", name).
-			Msg("Deleting unused service definition (no advertising hosts)")
+			Msg("Deleting unused service definition (no registered hosts)")
 
 		if err := c.deleteService(ctx, name); err != nil {
 			log.Error().

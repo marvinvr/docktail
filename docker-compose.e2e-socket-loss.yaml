@@ -1,0 +1,62 @@
+# Harness for the issue #72 / #78 root cause: the tailscaled socket directory is
+# replaced on the host while DockTail has it bind-mounted.
+#
+# The socket is shared through a HOST PATH rather than a named volume, because
+# that is what makes the bug possible. A named volume is a directory Docker owns
+# for the lifetime of the volume, so nothing on the host can replace it; a host
+# path can be removed and recreated underneath a running container, which is
+# exactly what systemd does to /run/tailscale (RuntimeDirectory=tailscale,
+# RuntimeDirectoryPreserve=no) every time tailscaled restarts.
+#
+# SOCKET_DIR and EXIT_ON_SOCKET_LOSS are set by e2e-socket-loss.sh, which runs
+# this stack twice: once with the watchdog off to prove the bug still reproduces,
+# and once with it on to prove the fix works.
+#
+# The `sidecar` profile provides the daemon in simulated mode. In systemd mode the
+# harness runs a real tailscaled under a real systemd unit on the host instead, so
+# the profile stays inactive and only DockTail comes up here.
+
+services:
+  # tailscaled is started directly instead of through the image's containerboot:
+  # the test only needs a real LocalAPI socket, and starting the daemon unauthed
+  # in userspace mode keeps the harness hermetic (no tailnet, no authkey, no TUN,
+  # no NET_ADMIN).
+  tailscale:
+    profiles: ["sidecar"]
+    image: tailscale/tailscale:latest
+    container_name: e2e-sl-tailscale
+    entrypoint:
+      - "/usr/local/bin/tailscaled"
+      - "--tun=userspace-networking"
+      - "--socket=/var/run/tailscale/tailscaled.sock"
+      - "--port=0"
+      # Quoted: the trailing colon would otherwise parse as a YAML mapping key.
+      - "--state=mem:"
+    volumes:
+      - ${SOCKET_DIR:?SOCKET_DIR must be set by e2e-socket-loss.sh}:/var/run/tailscale
+    restart: "no"
+
+  docktail:
+    build: .
+    container_name: e2e-sl-docktail
+    # No depends_on: DockTail is expected to tolerate starting before the daemon,
+    # and the harness waits for the socket itself. In systemd mode the tailscale
+    # service does not exist at all.
+    #
+    # The fix depends on a restart policy: DockTail exits so that Docker
+    # re-creates the container, which is the only thing that re-resolves the
+    # bind mount. This mirrors the documented deployment.
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${SOCKET_DIR:?SOCKET_DIR must be set by e2e-socket-loss.sh}:/var/run/tailscale
+    environment:
+      - LOG_LEVEL=debug
+      # Set per phase: false reproduces the pre-fix behaviour, true exercises the
+      # watchdog.
+      - EXIT_ON_SOCKET_LOSS=${EXIT_ON_SOCKET_LOSS:-true}
+      # Shortened so the test does not have to wait out the 90s default.
+      - SOCKET_LOSS_GRACE_PERIOD=${SOCKET_LOSS_GRACE_PERIOD:-20s}
+      - RECONCILE_INTERVAL=5s
+      # No credentials: this scenario never touches the tailnet.
+      - SKIP_SHUTDOWN_CLEANUP=true
