@@ -278,6 +278,19 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		}
 	}
 
+	// Sync Service definitions to the Control Plane (API) before advertising
+	// anything new. Tailscale's documented order is: define the Service, then
+	// configure and advertise a host for it. Advertising first leaves the node
+	// listed in prefs.AdvertiseServices for a Service the control plane does not
+	// know yet, and the host then stays at "0 hosts" until the node's Service
+	// set changes again for an unrelated reason (issue #72). Failures are
+	// non-blocking: local serving must not depend on the API being reachable.
+	if c.apiSyncEnabled {
+		if err := c.syncServiceDefinitions(ctx, desiredServices); err != nil {
+			log.Error().Err(err).Msg("Failed to sync service definitions to Tailscale API")
+		}
+	}
+
 	// Add new services
 	successCount := 0
 	failCount := 0
@@ -327,22 +340,12 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		return fmt.Errorf("funnel reconciliation failed: %w", err)
 	}
 
-	// Sync Service Definitions to Control Plane (API)
-	// This is done after local serve commands to ensure local state is consistent first,
-	// but failures here are non-blocking for the local advertisement.
-	if c.apiSyncEnabled {
-		if err := c.syncServiceDefinitions(ctx, desiredServices); err != nil {
-			// Log error but do NOT return it - we don't want API failures to break local serving
-			log.Error().Err(err).Msg("Failed to sync service definitions to Tailscale API")
-		}
-
-		// Optionally delete tailnet Service definitions no host advertises anymore.
-		// Runs after syncing so freshly created services are already in the desired
-		// set and therefore excluded. Failures are non-blocking.
-		if c.deleteUnusedServices {
-			if err := c.deleteUnusedServiceDefinitions(ctx, desiredServices); err != nil {
-				log.Error().Err(err).Msg("Failed to delete unused service definitions")
-			}
+	// Optionally delete tailnet Service definitions no host is registered for.
+	// This stays after local serve reconciliation so the desired set, which was
+	// synced above, is complete and protected. Failures are non-blocking.
+	if c.apiSyncEnabled && c.deleteUnusedServices {
+		if err := c.deleteUnusedServiceDefinitions(ctx, desiredServices); err != nil {
+			log.Error().Err(err).Msg("Failed to delete unused service definitions")
 		}
 	}
 
