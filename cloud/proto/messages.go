@@ -431,8 +431,10 @@ type Config struct {
 
 // LogConfig controls incident log capture. Mode is the workspace default and
 // Overrides set a per-service mode; the effective mode for a service is
-// Overrides[serviceKey] when present, else Mode (an empty Mode means the default
-// LogModeOff). Continuous capture is reserved and not yet emitted.
+// Overrides[serviceKey] when present, else Mode. The cloud sends LogModeIncident
+// for a workspace that never set the mode; an empty Mode on the wire still means
+// LogModeOff, so a malformed or truncated frame fails closed. Continuous capture
+// is reserved and not yet emitted.
 type LogConfig struct {
 	Mode      string            `json:"mode"`                // LogMode*; "" ⇒ LogModeOff
 	Overrides map[string]string `json:"overrides,omitempty"` // service_key -> LogMode*
@@ -610,7 +612,7 @@ const (
 // Log capture modes — the workspace default ([LogConfig.Mode]) and per-service
 // overrides ([LogConfig.Overrides]) both use these.
 const (
-	LogModeIncident   = "incident"   // capture the tail on a down-signal event
-	LogModeOff        = "off"        // never capture (default)
+	LogModeIncident   = "incident"   // capture the tail on a down-signal event (what the cloud sends unless the workspace turned capture off)
+	LogModeOff        = "off"        // never capture; also the fail-closed value for an empty or invalid mode
 	LogModeContinuous = "continuous" // reserved: rolling capture, not yet implemented
 )

@@ -67,7 +67,7 @@ When enabled, the agent reports the following operational data:
 - Docker failure events, including container exit codes, out-of-memory (OOM) kills, health-status changes, and restart loops.
 - Local-vantage check results. Checks default to TCP; cloud-managed config may select HTTP, a relative path, and expected status, but the destination always comes from the agent's local service discovery.
 - Tailscale control-plane service state, when Cloud asks for it (see [Tailnet Health](#tailnet-health)).
-- Bounded incident log excerpts when the workspace opts in. Before sending, the agent best-effort redacts common Authorization/Bearer credentials, passwords, tokens, API keys, credential URLs, JWTs, and private-key blocks, then applies the 40-line/8-KiB caps. Redaction cannot recognize every application-specific secret.
+- Bounded incident log excerpts. Cloud enables this by default and you can turn it off for the whole workspace or for an individual service; the agent captures nothing while the mode is off. Before sending, the agent best-effort redacts common Authorization/Bearer credentials, passwords, tokens, API keys, credential URLs, JWTs, and private-key blocks, then applies the 40-line/8-KiB caps. Redaction cannot recognize every application-specific secret, so turn capture off if your logs carry secrets those patterns will not match.
 
 ### What It Never Does
 
