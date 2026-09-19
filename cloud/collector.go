@@ -59,6 +59,11 @@ type Collector struct {
 	unmonitored  bool      // cloud reports this host inactive/past the plan cap; throttle output
 	lastTeaser   time.Time // last throttled teaser snapshot sent while unmonitored
 
+	// offline holds docker failure events and their log excerpts observed while no
+	// connection could carry them, for replay on the next accepted one. It has its
+	// own locks; never hold c.mu across a spool call.
+	offline spool
+
 	probeMu     sync.Mutex                 // serializes control-plane probes; guards probedAt + probeReport
 	probedAt    time.Time                  // last Tailscale control-plane read, for the agent-side minimum interval
 	probeReport proto.TailnetControlReport // last answer, re-served when the cloud asks again too soon
@@ -164,8 +169,14 @@ func (c *Collector) OnReconcile(ctx context.Context, services []*apptypes.Contai
 	}
 }
 
-// OnEvent maps a docker event to wire events and (if connected) sends them,
-// capturing a log excerpt for opted-in services on down signals.
+// OnEvent maps a docker event to wire events and sends them, capturing a log
+// excerpt for opted-in services on down signals.
+//
+// It runs whether or not the agent is connected: with no connection the frames go
+// to the offline spool and are replayed on the next one (see spool). A docker
+// failure signal is not periodic state — nothing later re-derives it, so a
+// container that dies and recovers inside a network blip would otherwise produce
+// no incident and no alert at all.
 func (c *Collector) OnEvent(ctx context.Context, msg events.Message) {
 	evs := c.mapEvents(ctx, msg)
 	if len(evs) == 0 {
@@ -175,13 +186,15 @@ func (c *Collector) OnEvent(ctx context.Context, msg events.Message) {
 	conn := c.conn
 	unmonitored := c.unmonitored
 	c.mu.RUnlock()
-	// Unmonitored: the cloud drops events and log excerpts, so don't send them
-	// (and skip the log capture work entirely).
-	if conn == nil || unmonitored {
+	// Unmonitored: the cloud drops events and log excerpts whenever they arrive, so
+	// neither send nor spool them (and skip the log capture work entirely).
+	if unmonitored {
 		return
 	}
 	for _, ev := range evs {
-		c.send(conn, proto.TypeEvent, ev)
+		c.sendOrSpool(conn, proto.TypeEvent, ev)
+		// Capture the tail now, not at replay time: by the time the link is back the
+		// container may have been recreated and its logs gone with it.
 		c.maybeCaptureLogs(ctx, conn, ev)
 	}
 }
@@ -519,7 +532,8 @@ func atoiPtr(s string) (*int, bool) {
 }
 
 // maybeCaptureLogs captures + sends a log excerpt for docker down-signal events
-// only when the service's effective capture mode enables it.
+// only when the service's effective capture mode enables it. conn may be nil (the
+// excerpt is then spooled for replay).
 // health_status is captured only on the unhealthy transition — the only one the
 // cloud opens an incident for; healthy/starting transitions carry no incident.
 func (c *Collector) maybeCaptureLogs(ctx context.Context, conn *wsConn, ev proto.Event) {
@@ -593,8 +607,8 @@ func (c *Collector) pruneCheckFails(present map[string]proto.Service) {
 
 // captureAndSend captures a capped log excerpt for a service and sends it, unless
 // the service's effective capture mode is off or there is no container to read.
-// Shared by the docker-event and local-check down paths. Best-effort: a capture
-// error is logged at debug and dropped.
+// Shared by the docker-event and local-check down paths. A nil conn spools the
+// excerpt for replay. Best-effort: a capture error is logged at debug and dropped.
 func (c *Collector) captureAndSend(ctx context.Context, conn *wsConn, serviceKey, containerID string) {
 	if containerID == "" || c.logModeFor(serviceKey) == proto.LogModeOff {
 		return
@@ -603,7 +617,7 @@ func (c *Collector) captureAndSend(ctx context.Context, conn *wsConn, serviceKey
 	if err != nil || excerpt == nil {
 		return
 	}
-	c.send(conn, proto.TypeLogExcerpt, excerpt)
+	c.sendOrSpool(conn, proto.TypeLogExcerpt, excerpt)
 	c.log.Debug().Str("service", serviceKey).Int("lines", len(excerpt.Lines)).Msg("cloud: log excerpt sent")
 }
 
@@ -714,8 +728,18 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
 	bo.reset()
 	c.setConn(conn)
 	c.sendCurrentSnapshot(conn)
-	go c.discoverLoop(connCtx, conn)
+	// Discovery, replay and the discover ticker share one goroutine so their order
+	// is guaranteed: the authoritative snapshot goes first because the cloud
+	// resolves every later frame's service key against what this connection has
+	// told it, and an excerpt with an unknown key is dropped outright rather than
+	// stored unattached.
+	go func() {
+		c.scanAndSnapshot(connCtx, conn)
+		c.replaySpool(connCtx, conn)
+		c.discoverLoop(connCtx, conn)
+	}()
 	go c.heartbeatLoop(connCtx, conn)
+	go c.replayLoop(connCtx, conn)
 	go c.checkLoop(connCtx, conn)
 	if c.hostMetricsCap {
 		go c.metricsLoop(connCtx, conn)
@@ -841,10 +865,12 @@ func (c *Collector) sendCurrentSnapshot(conn *wsConn) {
 // *successful* tailscale serve reconcile. A host with no tailnet (or a failing
 // one) therefore still reports its services to the cloud. OnReconcile remains
 // wired as an additional, event-driven refresh when the reconcile does succeed.
+//
+// Ticker only: the first scan is sent by session, ahead of the offline replay that
+// depends on it.
 func (c *Collector) discoverLoop(ctx context.Context, conn *wsConn) {
 	ticker := time.NewTicker(c.cfg.CheckInterval)
 	defer ticker.Stop()
-	c.scanAndSnapshot(ctx, conn)
 	for {
 		select {
 		case <-ctx.Done():
@@ -1004,6 +1030,93 @@ func (c *Collector) send(conn *wsConn, t proto.MessageType, msg any) {
 		return
 	}
 	conn.sendFrame(env)
+}
+
+// replaySendWait is how long one replayed frame waits for room in a connection's
+// send queue before the rest of the batch is put back in the spool. Long enough to
+// ride out a momentarily backed-up write pump, short enough that a wedged
+// connection is abandoned well inside the cloud's ~95s offline deadline.
+const replaySendWait = 5 * time.Second
+
+// sendOrSpool encodes a frame and sends it, spooling it for replay when there is no
+// connection or the send queue is full. Reserved for the frames whose loss is a
+// missed incident — docker failure events and the log excerpts captured on their
+// down edge. Periodic state keeps using send: the next tick replaces it, so
+// replaying it later would be noise.
+func (c *Collector) sendOrSpool(conn *wsConn, t proto.MessageType, msg any) {
+	env, err := proto.Encode(t, nowMillis(), msg)
+	if err != nil {
+		c.log.Warn().Err(err).Str("type", string(t)).Msg("cloud: encode failed")
+		return
+	}
+	if conn != nil && conn.sendFrame(env) {
+		return
+	}
+	c.offline.add(env)
+	c.log.Debug().Str("type", string(t)).Msg("cloud: frame buffered for replay")
+}
+
+// replaySpool flushes the spooled failure signals onto conn, oldest first and in
+// the order they were observed, so a die that preceded a start still reads that way
+// cloud-side. Each frame keeps the envelope timestamp and `occurred_at` it was
+// encoded with, so the cloud records the failure at the time it happened; it clamps
+// agent timestamps to 24h in the past, which is what bounds the spool's useful age.
+// Frames the connection will not take go back in the spool for the next attempt.
+func (c *Collector) replaySpool(ctx context.Context, conn *wsConn) {
+	if conn == nil || c.offline.len() == 0 {
+		return
+	}
+	c.offline.replayMu.Lock()
+	defer c.offline.replayMu.Unlock()
+
+	c.mu.RLock()
+	unmonitored := c.unmonitored
+	c.mu.RUnlock()
+	if unmonitored {
+		// The cloud drops events and excerpts for an unmonitored host, so there is
+		// nothing to deliver and no reason to pin the memory until a promotion that
+		// may never come.
+		if n := c.offline.discard(); n > 0 {
+			c.log.Debug().Int("frames", n).Msg("cloud: buffered failure signals discarded (unmonitored)")
+		}
+		return
+	}
+
+	envs, dropped := c.offline.drain(time.Now())
+	sent := 0
+	for i, env := range envs {
+		if ctx.Err() != nil || !conn.sendFrameWait(env, replaySendWait) {
+			c.offline.unshift(envs[i:], time.Now())
+			break
+		}
+		sent++
+	}
+	if sent > 0 || dropped > 0 {
+		c.log.Info().
+			Int("frames", sent).
+			Int("deferred", len(envs)-sent).
+			Int("dropped", dropped).
+			Msg("cloud: replayed buffered failure signals")
+	}
+}
+
+// replayLoop retries the spool on a ticker, for frames spooled because this
+// connection's send queue was momentarily full rather than because the agent was
+// disconnected — that backlog must not wait for the next reconnect to get out. It
+// is its own loop rather than a call on the heartbeat tick because a replay can
+// block waiting for queue room, and a stalled heartbeat would have the cloud
+// declare the host offline.
+func (c *Collector) replayLoop(ctx context.Context, conn *wsConn) {
+	ticker := time.NewTicker(proto.HeartbeatInterval * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.replaySpool(ctx, conn)
+		}
+	}
 }
 
 func (c *Collector) setConn(conn *wsConn) {

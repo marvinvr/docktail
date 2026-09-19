@@ -69,6 +69,17 @@ When enabled, the agent reports the following operational data:
 - Tailscale control-plane service state, when Cloud asks for it (see [Tailnet Health](#tailnet-health)).
 - Bounded incident log excerpts. Cloud enables this by default and you can turn it off for the whole workspace or for an individual service; the agent captures nothing while the mode is off. Before sending, the agent best-effort redacts common Authorization/Bearer credentials, passwords, tokens, API keys, credential URLs, JWTs, and private-key blocks, then applies the 40-line/8-KiB caps. Redaction cannot recognize every application-specific secret, so turn capture off if your logs carry secrets those patterns will not match.
 
+If the connection to Cloud drops, the agent keeps watching Docker and buffers the
+failure events it sees — plus the log tail for each, captured at the moment of the
+failure rather than on reconnect — then replays them with their original timestamps
+once the link is back. A container that crashes and recovers during a network blip
+or a Cloud deployment still produces an incident and an alert. The buffer is held in
+memory only, is capped (1024 frames / 1 MiB, newest kept), and frames older than an
+hour are discarded rather than replayed: by then Cloud has already alerted that the
+host stopped reporting, so re-raising hours-old container failures would only add
+noise. Periodic data — snapshots, check results, host metrics — is not buffered,
+since the next report replaces it anyway.
+
 ### What It Never Does
 
 - No remote command execution, deployment, or shell access. The protocol is metadata-only and has no exec, deploy, or shell message types.
