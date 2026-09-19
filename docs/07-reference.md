@@ -44,6 +44,7 @@ These variables enable optional DockTail Cloud reporting. They are opt-in: the a
 | `DOCKTAIL_CLOUD_KEY` | - | Workspace key (`dtc_...`) from the cloud dashboard. Enables reporting. Inert when unset. |
 | `DOCKTAIL_LOG_LEVEL` | `info` | Log level for the cloud module: `debug`, `info`, `warn`, or `error`. |
 | `DOCKTAIL_CHECK_INTERVAL` | `30s` | How often local-vantage checks run (5s–5m). |
+| `DOCKTAIL_HOST_ROOT` | `/host` | Where the host's root filesystem is bind-mounted, for whole-host disk usage. Only used when that path exists; see [Disk Usage](06-cloud.md#disk-usage). |
 
 Local-development overrides: `DOCKTAIL_CLOUD_URL` replaces the built-in ingest
 endpoint. `ws://` is allowed for loopback endpoints; non-loopback plaintext

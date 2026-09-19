@@ -50,6 +50,7 @@ connection when that changes; the agent does not need a restart.
 | `DOCKTAIL_CLOUD_KEY` | - | Workspace key (`dtc_...`) from the cloud dashboard. Enables reporting. Inert when unset. |
 | `DOCKTAIL_LOG_LEVEL` | `info` | Log level for the cloud module: `debug`, `info`, `warn`, or `error`. |
 | `DOCKTAIL_CHECK_INTERVAL` | `30s` | How often local-vantage checks run (5s–5m). |
+| `DOCKTAIL_HOST_ROOT` | `/host` | Where the host's root filesystem is bind-mounted, for whole-host disk usage (see [Disk Usage](#disk-usage)). Only used when that path exists. |
 
 For local development, `DOCKTAIL_CLOUD_URL` overrides the built-in endpoint.
 Plaintext `ws://` is accepted only for loopback endpoints unless
@@ -66,6 +67,7 @@ When enabled, the agent reports the following operational data:
 - A read-only inventory of the host's **other** containers — the ones *not* published with `docktail.*` labels, including stopped ones — with name, image, state/health, ports, and live CPU/memory. These containers are not actively probed; they are listed on the dashboard so you can see the host's whole Docker footprint, and can be explicitly watched for Docker-event-driven incidents and alerts.
 - Docker failure events, including container exit codes, out-of-memory (OOM) kills, health-status changes, and restart loops.
 - Local-vantage check results. Checks default to TCP; cloud-managed config may select HTTP, a relative path, and expected status, but the destination always comes from the agent's local service discovery.
+- Whole-host vitals, sampled every 30 seconds: CPU, memory and swap usage, load average, temperature where the machine has sensors, and per-filesystem disk usage (mount point, total, used, and available bytes, at most 16 filesystems). These describe the machine, not the containers; nothing is stored as history, each report replaces the last. Disk is read on Linux only, from `/proc/mounts` and `statfs`, and covers real filesystems only — network mounts such as NFS and CIFS are deliberately skipped, so an unresponsive NAS can never stall reporting.
 - Tailscale control-plane service state, when Cloud asks for it (see [Tailnet Health](#tailnet-health)).
 - For a Funnel-exposed service, this node's MagicDNS name — the public address its Funnel answers on (see [Public Health](#public-health)).
 - Bounded incident log excerpts. Cloud enables this by default and you can turn it off for the whole workspace or for an individual service; the agent captures nothing while the mode is off. Before sending, the agent best-effort redacts common Authorization/Bearer credentials, passwords, tokens, API keys, credential URLs, JWTs, and private-key blocks, then applies the 40-line/8-KiB caps. Redaction cannot recognize every application-specific secret, so turn capture off if your logs carry secrets those patterns will not match.
@@ -80,6 +82,31 @@ hour are discarded rather than replayed: by then Cloud has already alerted that 
 host stopped reporting, so re-raising hours-old container failures would only add
 noise. Periodic data — snapshots, check results, host metrics — is not buffered,
 since the next report replaces it anyway.
+
+### Disk Usage
+
+With the standard setup above — only the Docker socket mounted — the agent sees
+one filesystem: its own container root. That is less limiting than it sounds,
+because the container root passes through to the filesystem that actually holds
+`/var/lib/docker`, which on a normal install is the host's root filesystem and
+the usual reason a self-hosted box runs out of space. Cloud reports it as `/`.
+
+To see every filesystem the host has — a separate `/mnt/data`, a media disk, a
+backup volume — bind-mount the host's root into the container read-only:
+
+```yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Optional. Reports disk usage for every host filesystem, not just the
+      # one backing /var/lib/docker.
+      - /:/host:ro
+```
+
+The agent then reads the host's mount table and reports each filesystem under
+its real path (`/mnt/data`, not `/host/mnt/data`). The mount is read-only and
+used for nothing else; if you prefer a different mount point, set
+`DOCKTAIL_HOST_ROOT` to it. Without it, nothing else changes — every other
+metric is already the host's.
 
 ### What It Never Does
 

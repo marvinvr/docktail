@@ -76,6 +76,7 @@ type Collector struct {
 	hostMx         *hostMetricsReader // whole-host /proc + /sys vitals reader
 	hostMetricsCap bool               // host CPU/mem readable here → advertise + run metricsLoop
 	hostTempCap    bool               // temperature sensors detected → advertise host_temp
+	hostDiskCap    bool               // filesystems enumerable here → advertise host_disk
 	loadNodeScoped bool               // /proc loadavg is the physical node's, not this CT's → don't report it
 }
 
@@ -129,6 +130,7 @@ func NewCollector(ctx context.Context, cfg Config, dc *docker.Client, ts tailnet
 		hostMx:         hmr,
 		hostMetricsCap: hmr.available(),
 		hostTempCap:    hmr.tempAvailable(),
+		hostDiskCap:    hmr.diskAvailable(),
 	}
 	// On a Proxmox LXC the agent's /proc is the physical node's, so loadavg is the
 	// whole node's load — meaningless against the CT's (smaller) core count, where
@@ -998,6 +1000,9 @@ func (c *Collector) sendHello(ctx context.Context, conn *wsConn) bool {
 	}
 	if c.hostTempCap {
 		caps = append(caps, "host_temp")
+	}
+	if c.hostDiskCap {
+		caps = append(caps, proto.CapHostDisk)
 	}
 	// Two entries, not one. CapTailnetControl says "this agent understands the
 	// tailnet_probe frame" and is unconditional — it is what lets the cloud tell a

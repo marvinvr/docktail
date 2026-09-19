@@ -298,12 +298,29 @@ type HostMetrics struct {
 	// per-zone detail when available.
 	TempMaxC *float64      `json:"temp_max_c,omitempty"`
 	Temps    []TempReading `json:"temps,omitempty"`
+
+	// Filesystems is per-mount disk usage from /proc/mounts + statfs(2) — the
+	// most common self-hosted outage the other vitals cannot see. Best-effort
+	// and Linux-only; an agent that cannot enumerate mounts omits it entirely.
+	// Capped at MaxFilesystems entries, busiest first.
+	Filesystems []Filesystem `json:"filesystems,omitempty"`
 }
 
 // TempReading is one labeled temperature sensor reading, in degrees Celsius.
 type TempReading struct {
 	Label   string  `json:"label"`
 	Celsius float64 `json:"celsius"`
+}
+
+// Filesystem is one mounted filesystem's capacity, in bytes. Total is
+// f_blocks×f_bsize, Used is (f_blocks−f_bfree)×f_bsize and Avail is
+// f_bavail×f_bsize, so usage reads exactly like `df`: Used/(Used+Avail) —
+// which, unlike Used/Total, is not skewed by the root reserve.
+type Filesystem struct {
+	Mount      string `json:"mount"`
+	TotalBytes int64  `json:"total_bytes,omitempty"`
+	UsedBytes  int64  `json:"used_bytes,omitempty"`
+	AvailBytes int64  `json:"avail_bytes,omitempty"`
 }
 
 // TailnetReport carries the agent's view of its local tailscale netmap: the
@@ -641,6 +658,13 @@ const (
 // upgrade it. See [PublicUnavailAgentOutdated] / [PublicUnavailNoHostname].
 const CapFunnelHostname = "funnel_hostname"
 
+// CapHostDisk means the agent reports [HostMetrics.Filesystems]. Like
+// [CapFunnelHostname] it is a pure version marker, advertised whenever the agent
+// can enumerate mounts at all: without it "no filesystem is readable here" and
+// "this agent is too old to look" would be indistinguishable, and the host page
+// would tell an operator with a current agent to upgrade it.
+const CapHostDisk = "host_disk"
+
 // Reasons a [TailnetControlReport] carries Available=false. The cloud surfaces
 // these verbatim so the UI can tell the operator what to fix rather than showing
 // a phantom outage.
@@ -669,6 +693,11 @@ const (
 	MaxLogLines = 40
 	MaxLogBytes = 8 * 1024
 )
+
+// MaxFilesystems caps the per-mount detail on a [HostMetrics] frame (also
+// enforced agent-side, which sends the busiest mounts first). A host with more
+// filesystems than this has a storage layout no vitals strip can render anyway.
+const MaxFilesystems = 16
 
 // Log capture modes — the workspace default ([LogConfig.Mode]) and per-service
 // overrides ([LogConfig.Overrides]) both use these.

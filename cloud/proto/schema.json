@@ -167,7 +167,8 @@
         "load5": { "type": "number" },
         "load15": { "type": "number" },
         "temp_max_c": { "type": "number", "description": "hottest sensor reading in degrees Celsius" },
-        "temps": { "type": "array", "items": { "$ref": "#/$defs/TempReading" } }
+        "temps": { "type": "array", "items": { "$ref": "#/$defs/TempReading" } },
+        "filesystems": { "type": "array", "description": "per-mount disk usage from /proc/mounts + statfs(2), busiest first, max 16", "items": { "$ref": "#/$defs/Filesystem" } }
       }
     },
     "TempReading": {
@@ -176,6 +177,17 @@
       "properties": {
         "label": { "type": "string" },
         "celsius": { "type": "number" }
+      }
+    },
+    "Filesystem": {
+      "type": "object",
+      "description": "One mounted filesystem's capacity in bytes. Usage reads like `df`: used/(used+avail), which the root reserve does not skew.",
+      "required": ["mount"],
+      "properties": {
+        "mount": { "type": "string", "description": "mount point as the host sees it, e.g. / or /mnt/data" },
+        "total_bytes": { "type": "integer" },
+        "used_bytes": { "type": "integer" },
+        "avail_bytes": { "type": "integer", "description": "bytes available to unprivileged users (excludes the root reserve)" }
       }
     },
     "TailnetReport": {
