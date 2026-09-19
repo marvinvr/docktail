@@ -39,6 +39,7 @@ type hostMetricsReader struct {
 	prev      cpuJiffies
 	havePrev  bool
 	readTemps bool // whether temperature sensors were detected at startup
+	readDisk  bool // whether any filesystem was enumerable at startup
 }
 
 type cpuJiffies struct {
@@ -47,12 +48,14 @@ type cpuJiffies struct {
 }
 
 // newHostMetricsReader builds a reader and probes once whether temperature
-// sensors are readable, so the agent can advertise a matching capability.
+// sensors and filesystems are readable, so the agent can advertise matching
+// capabilities.
 func newHostMetricsReader() *hostMetricsReader {
 	r := &hostMetricsReader{}
 	if _, list := readTemps(); len(list) > 0 {
 		r.readTemps = true
 	}
+	r.readDisk = hostFSAvailable()
 	return r
 }
 
@@ -69,10 +72,13 @@ func (r *hostMetricsReader) available() bool {
 // tempAvailable reports whether at least one temperature sensor was found.
 func (r *hostMetricsReader) tempAvailable() bool { return r.readTemps }
 
+// diskAvailable reports whether at least one filesystem could be enumerated.
+func (r *hostMetricsReader) diskAvailable() bool { return r.readDisk }
+
 // sample reads one set of host vitals. CPU% is nil until a second sample
-// establishes a delta. Temperature is read only when sensors were detected at
-// startup. Fields the host can't supply are left zero/nil and the cloud stores
-// them as NULL.
+// establishes a delta. Temperature and disk are read only when sensors /
+// filesystems were detected at startup. Fields the host can't supply are left
+// zero/nil and the cloud stores them as NULL.
 func (r *hostMetricsReader) sample() proto.HostMetrics {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -104,6 +110,10 @@ func (r *hostMetricsReader) sample() proto.HostMetrics {
 		if max, list := readTemps(); len(list) > 0 {
 			m.TempMaxC, m.Temps = max, list
 		}
+	}
+
+	if r.readDisk {
+		m.Filesystems = readFilesystems()
 	}
 
 	return m
