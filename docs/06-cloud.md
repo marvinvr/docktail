@@ -11,7 +11,7 @@ DockTail Cloud is optional, opt-in monitoring for DockTail-managed services acro
 - **Incidents with the evidence attached.** Docker failure events and a bounded log tail captured at the moment of failure, so you start from the reason instead of from a graph.
 - **Alerts and recoveries.** Notification when a service breaks and when it comes back — including hosts that drop off entirely, since detection runs in Cloud rather than on the box.
 
-Reporting rides along with the normal agent — there is no separate binary. The same DockTail container gains cloud reporting when a workspace key is present, and stays completely inert without one.
+Reporting rides along with the normal agent — there is no separate binary. The same DockTail container gains cloud reporting when a workspace key is present, and stays completely inert without one — the only trace is a single info line at startup noting that DockTail Cloud is not connected.
 
 ### How To Enable
 

@@ -146,6 +146,9 @@ func main() {
 				Str("fingerprint", collector.Fingerprint()).
 				Msg("DockTail Cloud reporting enabled")
 		}
+	} else {
+		// Logged once at startup only, never per reconcile.
+		log.Info().Msg("DockTail Cloud not connected (optional): multi-host monitoring at https://docktail.org/cloud/")
 	}
 
 	// Watch for a tailscaled socket that stops being reachable and never comes
