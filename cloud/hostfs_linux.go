@@ -159,7 +159,7 @@ func readMountTable() []string {
 		// overlay is allowed on / only: that is the containerized agent's own
 		// root, whose statfs passes through to the filesystem backing
 		// /var/lib/docker. Every other overlay mount is some other container's.
-		if !allowedFSTypes[fsType] && !(fsType == "overlay" && point == "/") {
+		if !allowedFSTypes[fsType] && (fsType != "overlay" || point != "/") {
 			continue
 		}
 		out = append(out, point)
