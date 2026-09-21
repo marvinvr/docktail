@@ -24,7 +24,7 @@ Tailnet clients access container services
 ### Reconciliation Flow
 
 1. DockTail monitors Docker events for container starts and stops.
-2. It extracts service configuration from container labels.
+2. It extracts service configuration from container labels. If several containers claim the same service name and port, that endpoint is frozen in its current state and an error is logged; see [Service Name Conflicts Between Containers](04-labels.md#service-name-conflicts-between-containers).
 3. It resolves the backend destination from Docker network settings or published ports.
 4. It generates Tailscale service configuration pointing to that backend.
 5. If OAuth or API key credentials are configured, it creates service definitions through the Tailscale API and keeps their tags and descriptions in sync with the labels; manual edits to either are overwritten. This runs before any new service is advertised, matching Tailscale's documented order: define the Service first, then advertise a host for it.

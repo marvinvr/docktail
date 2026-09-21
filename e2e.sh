@@ -12,6 +12,8 @@ MANUAL_PROTECTED_SERVICE_PORT="80"
 # Control-plane cleanup test fixtures (created directly via the Tailscale API)
 ORPHAN_SERVICE_NAME="svc:e2e-orphan"           # never advertised -> DockTail should delete it
 ORPHAN_SERVICE_PORT="80"
+# Started with docker run by the endpoint conflict test, so compose cannot remove it
+CONFLICT_CONTAINER="e2e-conflict-intruder"
 API_TAILNET="${TS_TAILNET:--}"
 API_BASE="https://api.tailscale.com/api/v2"
 
@@ -32,6 +34,7 @@ fail() { echo "  FAIL: $1"; failed=$((failed + 1)); errors="${errors}\n  - $1"; 
 cleanup() {
     log "Cleaning up"
     kill "$TIMEOUT_PID" 2>/dev/null || true
+    docker rm -f "$CONFLICT_CONTAINER" >/dev/null 2>&1 || true
     docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
     sweep_e2e_services
     rm -rf "$E2E_SECRETS_DIR"
@@ -1154,10 +1157,85 @@ assert_service_proxy_protocol "e2e-proxy-protocol-idx" "2"
 assert_service_not_exists   "e2e-proxy-protocol-http"
 
 # ==============================================================================
-# 17. Log Health
+# 17. Service Endpoint Conflict Between Containers
+# ==============================================================================
+#
+# A second container declaring an already-served service name + port must not
+# take the endpoint over. DockTail freezes the conflicted endpoint (the
+# incumbent keeps serving), logs the conflict, and keeps reconciling everything
+# else, including the intruder's own non-conflicting services.
+
+log "17. Service Endpoint Conflict Between Containers"
+
+service_destination() {
+    echo "$SERVE_STATUS_CACHE" | jq -r "[.Services[\"svc:$1\"].Web[].Handlers[].Proxy // empty] | first // empty" 2>/dev/null || true
+}
+
+assert_service_destination_is() {
+    local actual
+    actual=$(service_destination "$1")
+    if [ "$actual" = "$2" ]; then
+        pass "svc:$1 destination is still '$2'"
+    else
+        fail "svc:$1 destination is '$actual', expected '$2'"
+    fi
+}
+
+refresh_serve_status
+owner_destination=$(service_destination "e2e-proto-http")
+if [ -n "$owner_destination" ]; then
+    pass "svc:e2e-proto-http is served by its owner at '$owner_destination'"
+else
+    fail "svc:e2e-proto-http has no destination before the conflict test"
+fi
+
+echo "  --- Starting a second container claiming svc:e2e-proto-http:80 ---"
+docker rm -f "$CONFLICT_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+    --name "$CONFLICT_CONTAINER" \
+    --restart no \
+    --label "docktail.service.enable=true" \
+    --label "docktail.service.name=e2e-proto-http" \
+    --label "docktail.service.port=80" \
+    --label "docktail.service.service-port=80" \
+    --label "docktail.service.service-protocol=http" \
+    --label "docktail.service.1.name=e2e-conflict-bystander" \
+    --label "docktail.service.1.port=80" \
+    --label "docktail.service.1.service-port=80" \
+    --label "docktail.service.1.service-protocol=http" \
+    nginx:alpine >/dev/null 2>&1
+
+wait_for_docktail_log "Service endpoint conflict" "$((RECONCILE_WAIT * 3))"
+wait_for_service_state "e2e-conflict-bystander" "80" "http" "$((RECONCILE_WAIT * 3))"
+# Let at least one more full cycle run with the conflict in place.
+sleep "$RECONCILE_WAIT"
+refresh_serve_status
+
+echo "  --- Incumbent keeps the endpoint, the rest still reconciles ---"
+assert_service_destination_is "e2e-proto-http" "$owner_destination"
+assert_service_path         "e2e-proto-http" "/api"
+assert_service_exists       "e2e-conflict-bystander"
+
+echo "  --- Removing the second container resolves the conflict ---"
+docker rm -f "$CONFLICT_CONTAINER" >/dev/null 2>&1 || true
+elapsed=0
+while [ "$elapsed" -lt "$((RECONCILE_WAIT * 3))" ]; do
+    refresh_serve_status
+    if ! echo "$SERVE_STATUS_CACHE" | jq -e '.Services["svc:e2e-conflict-bystander"]' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+done
+assert_service_not_exists   "e2e-conflict-bystander"
+assert_service_destination_is "e2e-proto-http" "$owner_destination"
+assert_service_path         "e2e-proto-http" "/api"
+
+# ==============================================================================
+# 18. Log Health
 # ==============================================================================
 
-log "17. DockTail Log Health"
+log "18. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if grep -qE "FATAL|panic" <<<"$docktail_logs"; then

@@ -73,6 +73,28 @@ services:
 
 Each indexed service requires its own `name` and `port`. Per-index overridable labels are `name`, `port`, `service-port`, `protocol`, `service-protocol`, `path`, `proxy-protocol`, and `description`. Tags and network settings are inherited from the primary service config.
 
+### Service Name Conflicts Between Containers
+
+Several containers may share a service name as long as each uses a different `service-port`. A given service name and `service-port` pair can only be backed by one container per DockTail host. If two containers declare the same pair, for example after copy-pasting labels:
+
+```yaml
+services:
+  app:
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=web"
+      - "docktail.service.port=3000"
+  app-copy:
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=web" # conflicts with app on svc:web:80
+      - "docktail.service.port=3000"
+```
+
+DockTail does not pick a winner. It logs `Service endpoint conflict` with both container names, leaves that endpoint exactly as it is currently served (a container that already serves it keeps it; if nobody does, it stays unserved), pauses tag and description syncing and the removal of stale ports for that service name, and reports the reconciliation as failed until only one container claims the pair. All other services keep reconciling normally.
+
+This is a guard against misconfiguration, not a tenant isolation boundary: DockTail trusts every container that can carry `docktail.*` labels, and once the original container stops, the remaining one becomes the sole claimant and is served.
+
 ### Funnel Labels
 
 Funnel exposes a service to the public internet. It can be used together with a private DockTail service or on its own for funnel-only containers.
