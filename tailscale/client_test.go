@@ -377,3 +377,32 @@ func TestDeleteUnusedServiceDefinitionsUsesAdvertisingHosts(t *testing.T) {
 		t.Errorf("advertised service host checks = %d, want 1", hostChecks[advertisedService])
 	}
 }
+
+func TestBuildDesiredServiceMapDetectsCrossContainerConflicts(t *testing.T) {
+	services := []*apptypes.ContainerService{
+		{ContainerName: "intruder", ServiceEnabled: true, ServiceName: "web", Port: "443"},
+		{ContainerName: "owner", ServiceEnabled: true, ServiceName: "web", Port: "443"},
+		// Same service name on another port is a supported multi-container setup.
+		{ContainerName: "metrics", ServiceEnabled: true, ServiceName: "web", Port: "9090"},
+		{ContainerName: "other", ServiceEnabled: true, ServiceName: "api", Port: "443"},
+		// Funnel-only containers never claim a service endpoint.
+		{ContainerName: "funnel-only", ServiceEnabled: false, ServiceName: "web", Port: "443"},
+	}
+
+	desired, conflicts := buildDesiredServiceMap(services)
+
+	if got := conflicts["svc:web:443"]; !slices.Equal(got, []string{"intruder", "owner"}) {
+		t.Fatalf("expected svc:web:443 conflict between intruder and owner, got %v", got)
+	}
+	if len(conflicts) != 1 {
+		t.Fatalf("expected exactly one conflict, got %v", conflicts)
+	}
+	if _, ok := desired["svc:web:443"]; ok {
+		t.Fatal("conflicted endpoint must not have a winner in the desired map")
+	}
+	for key, container := range map[string]string{"svc:web:9090": "metrics", "svc:api:443": "other"} {
+		if svc, ok := desired[key]; !ok || svc.ContainerName != container {
+			t.Fatalf("expected %s to be served by %s, got %+v", key, container, svc)
+		}
+	}
+}

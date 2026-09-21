@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -179,14 +180,15 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		Int("desired_count", serviceDesiredCount).
 		Msg("Starting service reconciliation using CLI commands")
 
-	// Build map of desired services for easy lookup
-	desiredMap := make(map[string]*apptypes.ContainerService)
-	for _, svc := range desiredServices {
-		if !svc.ServiceEnabled {
-			continue
-		}
-		key := fmt.Sprintf("svc:%s:%s", svc.ServiceName, svc.Port)
-		desiredMap[key] = svc
+	// Build map of desired services for easy lookup. Endpoints claimed by more
+	// than one container are left out: nobody may win them, see
+	// buildDesiredServiceMap.
+	desiredMap, conflicts := buildDesiredServiceMap(desiredServices)
+	for _, key := range sortedConflictKeys(conflicts) {
+		log.Error().
+			Str("key", key).
+			Strs("containers", conflicts[key]).
+			Msg("Service endpoint conflict: several containers declare the same service name and port; leaving the current state untouched until only one of them claims it")
 	}
 
 	// Get current services
@@ -248,6 +250,11 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 
 	// Find services to remove (in current but not in desired)
 	for key, current := range currentServices {
+		if _, conflicted := conflicts[key]; conflicted {
+			// Frozen: a newly started container must neither take over nor
+			// tear down whatever is currently serving this endpoint.
+			continue
+		}
 		if _, exists := desiredMap[key]; !exists {
 			if c.shouldIgnoreService(current.ServiceName) {
 				log.Info().
@@ -293,8 +300,16 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	// know yet, and the host then stays at "0 hosts" until the node's Service
 	// set changes again for an unrelated reason (issue #72). Failures are
 	// non-blocking: local serving must not depend on the API being reachable.
+	// Conflicted endpoints are frozen, so their claimants must not rewrite the
+	// definition's tags or description either.
 	if c.apiSyncEnabled {
-		if err := c.syncServiceDefinitions(ctx, desiredServices); err != nil {
+		syncable := make([]*apptypes.ContainerService, 0, len(desiredMap))
+		for _, svc := range desiredServices {
+			if _, conflicted := conflicts[desiredServiceKey(svc)]; !conflicted {
+				syncable = append(syncable, svc)
+			}
+		}
+		if err := c.syncServiceDefinitions(ctx, syncable); err != nil {
 			log.Error().Err(err).Msg("Failed to sync service definitions to Tailscale API")
 		}
 	}
@@ -368,7 +383,55 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		}
 	}
 
+	if len(conflicts) > 0 {
+		return fmt.Errorf("service configuration error: %d service endpoint(s) are claimed by more than one container: %v", len(conflicts), sortedConflictKeys(conflicts))
+	}
+
 	return nil
+}
+
+// buildDesiredServiceMap indexes the enabled desired services by their
+// "svc:<name>:<port>" endpoint key. An endpoint can only be backed by one
+// container on this node, so a key declared by several containers is a
+// conflict. Conflicted keys are returned separately (key -> claiming container
+// names) and are absent from the desired map: picking a winner would let
+// whichever container happens to sort last silently take over another
+// container's tailnet hostname. Containers sharing a service name on
+// different ports are fine.
+func buildDesiredServiceMap(desiredServices []*apptypes.ContainerService) (map[string]*apptypes.ContainerService, map[string][]string) {
+	desiredMap := make(map[string]*apptypes.ContainerService)
+	claimants := make(map[string][]string)
+	for _, svc := range desiredServices {
+		if !svc.ServiceEnabled {
+			continue
+		}
+		key := desiredServiceKey(svc)
+		desiredMap[key] = svc
+		claimants[key] = append(claimants[key], svc.ContainerName)
+	}
+
+	conflicts := make(map[string][]string)
+	for key, names := range claimants {
+		if len(names) > 1 {
+			conflicts[key] = names
+			delete(desiredMap, key)
+		}
+	}
+	return desiredMap, conflicts
+}
+
+// desiredServiceKey matches the endpoint keys GetCurrentServices reports.
+func desiredServiceKey(svc *apptypes.ContainerService) string {
+	return fmt.Sprintf("svc:%s:%s", svc.ServiceName, svc.Port)
+}
+
+func sortedConflictKeys(conflicts map[string][]string) []string {
+	keys := make([]string, 0, len(conflicts))
+	for key := range conflicts {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // serviceDef is the deduplicated, per-service-name view of the desired state
