@@ -91,7 +91,7 @@ services:
       - "docktail.service.port=3000"
 ```
 
-DockTail does not pick a winner. It logs `Service endpoint conflict` with both container names, leaves that endpoint exactly as it is currently served (a container that already serves it keeps it; if nobody does, it stays unserved), does not sync the conflicting containers' tags or description for it, and reports the reconciliation as failed until only one container claims the pair. All other services keep reconciling normally.
+DockTail does not pick a winner. It logs `Service endpoint conflict` with both container names, leaves that endpoint exactly as it is currently served (a container that already serves it keeps it; if nobody does, it stays unserved), pauses tag and description syncing and the removal of stale ports for that service name, and reports the reconciliation as failed until only one container claims the pair. All other services keep reconciling normally.
 
 This is a guard against misconfiguration, not a tenant isolation boundary: DockTail trusts every container that can carry `docktail.*` labels, and once the original container stops, the remaining one becomes the sole claimant and is served.
 

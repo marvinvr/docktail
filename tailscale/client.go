@@ -191,6 +191,13 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 			Msg("Service endpoint conflict: several containers declare the same service name and port; leaving the current state untouched until only one of them claims it")
 	}
 
+	conflictedNames := make(map[string]struct{})
+	for _, svc := range desiredServices {
+		if _, conflicted := conflicts[desiredServiceKey(svc)]; svc.ServiceEnabled && conflicted {
+			conflictedNames[normalizeServiceName(svc.ServiceName)] = struct{}{}
+		}
+	}
+
 	// Get current services
 	currentServices, err := c.GetCurrentServices(ctx)
 	if err != nil {
@@ -250,9 +257,10 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 
 	// Find services to remove (in current but not in desired)
 	for key, current := range currentServices {
-		if _, conflicted := conflicts[key]; conflicted {
+		if _, conflicted := conflictedNames[normalizeServiceName(current.ServiceName)]; conflicted {
 			// Frozen: a newly started container must neither take over nor
-			// tear down whatever is currently serving this endpoint.
+			// tear down whatever is currently serving this endpoint. Removal
+			// clears the whole service, so stale sibling ports wait as well.
 			continue
 		}
 		if _, exists := desiredMap[key]; !exists {
@@ -300,12 +308,12 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	// know yet, and the host then stays at "0 hosts" until the node's Service
 	// set changes again for an unrelated reason (issue #72). Failures are
 	// non-blocking: local serving must not depend on the API being reachable.
-	// Conflicted endpoints are frozen, so their claimants must not rewrite the
-	// definition's tags or description either.
+	// Conflicted endpoints are frozen, so nothing may rewrite the tags or
+	// description of the (per-name) definition they belong to either.
 	if c.apiSyncEnabled {
 		syncable := make([]*apptypes.ContainerService, 0, len(desiredMap))
 		for _, svc := range desiredServices {
-			if _, conflicted := conflicts[desiredServiceKey(svc)]; !conflicted {
+			if _, conflicted := conflictedNames[normalizeServiceName(svc.ServiceName)]; !conflicted {
 				syncable = append(syncable, svc)
 			}
 		}
