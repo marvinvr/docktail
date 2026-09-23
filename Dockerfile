@@ -17,7 +17,7 @@ COPY . .
 
 # Build the application
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo \
-    -ldflags "-w -s -X github.com/marvinvr/docktail/cloud.agentVersion=${VERSION}" \
+    -ldflags "-w -s -X github.com/marvinvr/docktail/version.Version=${VERSION}" \
     -o docktail .
 
 # Tailscale binary stage — ensures CLI version matches the sidecar daemon exactly
@@ -36,7 +36,9 @@ WORKDIR /app
 # Copy binary from build stage
 COPY --from=builder /build/docktail .
 
+# Reads the status file the running process keeps current: healthy while the
+# reconcile loop keeps succeeding (see docs/07-reference.md#health-check).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD tailscale --socket=${TAILSCALE_SOCKET:-/var/run/tailscale/tailscaled.sock} serve status || exit 1
+  CMD ["/app/docktail", "health"]
 
 ENTRYPOINT ["/bin/sh", "-c", "sleep 1 && exec /app/docktail"]

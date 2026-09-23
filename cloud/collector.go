@@ -15,11 +15,12 @@ import (
 	"github.com/marvinvr/docktail/cloud/proto"
 	"github.com/marvinvr/docktail/docker"
 	apptypes "github.com/marvinvr/docktail/types"
+	"github.com/marvinvr/docktail/version"
 )
 
-// agentVersion is reported in Hello. Release builds replace the development
-// value with the DockTail image tag via -ldflags.
-var agentVersion = "dev"
+// agentVersion is reported in Hello: the DockTail build version, which release
+// builds set via -ldflags on version.Version.
+var agentVersion = version.Version
 
 // restartLoopThreshold is the container RestartCount above which a die is also
 // treated as a restart-loop signal.
@@ -78,6 +79,9 @@ type Collector struct {
 	hostTempCap    bool               // temperature sensors detected → advertise host_temp
 	hostDiskCap    bool               // filesystems enumerable here → advertise host_disk
 	loadNodeScoped bool               // /proc loadavg is the physical node's, not this CT's → don't report it
+
+	createdAt time.Time   // when the collector was built; the link has been "connecting" since
+	link      linkTracker // connection state for the local health status (link.go)
 }
 
 // cpuSample is the previous CPU counter reading kept per container. Docker
@@ -131,6 +135,7 @@ func NewCollector(ctx context.Context, cfg Config, dc *docker.Client, ts tailnet
 		hostMetricsCap: hmr.available(),
 		hostTempCap:    hmr.tempAvailable(),
 		hostDiskCap:    hmr.diskAvailable(),
+		createdAt:      time.Now(),
 	}
 	// On a Proxmox LXC the agent's /proc is the physical node's, so loadavg is the
 	// whole node's load — meaningless against the CT's (smaller) core count, where
@@ -664,6 +669,7 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
 	dialCtx, dialCancel := context.WithTimeout(ctx, 20*time.Second)
 	conn, err := dial(dialCtx, c.cfg.URL, c.cfg.Key, c.log)
 	dialCancel()
+	c.noteDial(err)
 	if err != nil {
 		var de *dialError
 		if asDialError(err, &de) && (de.statusCode == 401 || de.statusCode == 403) {
@@ -680,6 +686,7 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
 	ackCh := make(chan proto.HelloAck, 1)
 	h := handlers{
 		onHelloAck: func(ack proto.HelloAck) {
+			c.noteHelloAck(ack)
 			select {
 			case ackCh <- ack:
 			default:
@@ -1145,14 +1152,19 @@ func (c *Collector) setConn(conn *wsConn) {
 	c.mu.Lock()
 	c.conn = conn
 	c.mu.Unlock()
+	c.setLink(LinkConnected, "")
 }
 
 func (c *Collector) clearConn(conn *wsConn) {
 	c.mu.Lock()
-	if c.conn == conn {
+	cleared := c.conn == conn
+	if cleared {
 		c.conn = nil
 	}
 	c.mu.Unlock()
+	if cleared {
+		c.setLink(LinkDisconnected, "connection closed")
+	}
 }
 
 func (c *Collector) applyConfig(cfg proto.Config) {

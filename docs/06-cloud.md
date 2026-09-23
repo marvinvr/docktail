@@ -37,6 +37,14 @@ services:
 
 With no key set, no connection is opened and DockTail runs exactly as before.
 
+`docktail health` reports the connection state (`connecting`, `connected`,
+`disconnected`, `rejected` with the reason, or `failed` when the module could
+not start, for example with a malformed key) without ever making the container unhealthy; see
+[Health Check](07-reference.md#health-check). When the cloud accepts the
+connection the agent also compares its clock with the cloud's and warns if they
+are more than 60 seconds apart, since event and check times would then be off;
+enable time sync (NTP) on the host.
+
 If Cloud marks a host as unmonitored (for example, the host sits past the
 workspace's host cap), the agent keeps the connection open with heartbeats and
 occasional catalog snapshots and pauses checks, Docker events, metrics, tailnet
