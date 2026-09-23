@@ -100,7 +100,7 @@ type containerStats struct {
 // NewCollector builds a Collector, reading the host fingerprint (docker engine
 // ID) and versions up front. Returns an error only if the engine ID can't be
 // read — without it there is no stable host identity. ts reads the local
-// tailscale daemon (peer liveness, node identity) and, when API credentials are
+// tailscale daemon (node identity, MagicDNS name) and, when API credentials are
 // configured, the Tailscale control plane behind the tailnet vantage; pass nil
 // to run without any tailnet signals.
 func NewCollector(ctx context.Context, cfg Config, dc *docker.Client, ts tailnetSource, logger zerolog.Logger) (*Collector, error) {
@@ -759,7 +759,7 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
 		go c.metricsLoop(connCtx, conn)
 	}
 	if c.tailnet != nil {
-		go c.tailnetLoop(connCtx, conn)
+		go c.selfDNSNameLoop(connCtx)
 	}
 
 	err = <-runDone

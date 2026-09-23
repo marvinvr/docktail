@@ -5,15 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 )
 
 // TailnetStatus is a minimal view of `tailscale status --json`: this node's
-// stable ID and MagicDNS name, the tailnet it belongs to, and the online/offline
-// status of the tailnet devices (peers) it can see. DockTail Cloud uses it (read
-// over the local daemon, no API key) to report peer device liveness so the cloud
-// can tell a dead agent from a dead host, and to say where this node's Funnel
-// exposure answers on the public internet.
+// stable ID and MagicDNS name, and the tailnet it belongs to. DockTail Cloud
+// reads it over the local daemon (no API key) to identify this node and to say
+// where its Funnel exposure answers on the public internet.
 type TailnetStatus struct {
 	SelfNodeID string
 	// SelfDNSName is this node's MagicDNS name with the trailing dot stripped
@@ -25,23 +22,13 @@ type TailnetStatus struct {
 	// daemons and a logged-out node report nothing, so an empty value means
 	// "unknown", never "no tailnet".
 	Tailnet string
-	Peers   []TailnetPeerStatus
-}
-
-// TailnetPeerStatus is one tailnet device's liveness as seen in this node's netmap.
-type TailnetPeerStatus struct {
-	NodeID   string
-	Hostname string
-	Online   bool
-	LastSeen time.Time
 }
 
 // statusJSON is the subset of `tailscale status --json` (tailscaled's
 // ipnstate.Status) that we parse.
 type statusJSON struct {
-	Self           *statusNode            `json:"Self"`
-	Peer           map[string]*statusNode `json:"Peer"`
-	CurrentTailnet *statusTailnet         `json:"CurrentTailnet"`
+	Self           *statusNode    `json:"Self"`
+	CurrentTailnet *statusTailnet `json:"CurrentTailnet"`
 }
 
 // statusTailnet is ipnstate.Status.CurrentTailnet. Name is the human-facing
@@ -53,15 +40,12 @@ type statusTailnet struct {
 }
 
 type statusNode struct {
-	ID       string    `json:"ID"`
-	DNSName  string    `json:"DNSName"` // FQDN with a trailing dot, e.g. "box.tail1234.ts.net."
-	HostName string    `json:"HostName"`
-	Online   bool      `json:"Online"`
-	LastSeen time.Time `json:"LastSeen"`
+	ID      string `json:"ID"`
+	DNSName string `json:"DNSName"` // FQDN with a trailing dot, e.g. "box.tail1234.ts.net."
 }
 
-// Status runs `tailscale status --json` and parses this node's stable ID, its
-// tailnet name, and the liveness of the peers it can see. Returns an error if
+// Status runs `tailscale status --json` and parses this node's stable ID,
+// MagicDNS name and tailnet name. Returns an error if
 // the daemon isn't reachable or the output can't be parsed — callers treat that
 // as "no tailnet" and skip reporting.
 func (c *Client) Status(ctx context.Context) (*TailnetStatus, error) {
@@ -84,17 +68,6 @@ func (c *Client) Status(ctx context.Context) (*TailnetStatus, error) {
 		if out.Tailnet == "" {
 			out.Tailnet = st.CurrentTailnet.MagicDNSSuffix
 		}
-	}
-	for _, p := range st.Peer {
-		if p == nil || p.ID == "" {
-			continue
-		}
-		out.Peers = append(out.Peers, TailnetPeerStatus{
-			NodeID:   p.ID,
-			Hostname: p.HostName,
-			Online:   p.Online,
-			LastSeen: p.LastSeen,
-		})
 	}
 	return out, nil
 }
