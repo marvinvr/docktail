@@ -13,14 +13,14 @@ import (
 )
 
 // tailnetSource is the read-only tailscale view the collector needs: the local
-// daemon (peer liveness, this node's identity, the tailnet name) plus the
+// daemon (this node's identity, MagicDNS name and tailnet name) plus the
 // control-plane reads that answer a [proto.TailnetProbe] with the credentials
 // DockTail already holds. *tailscale.Client satisfies it. Nil when DockTail has
-// no tailscale client, in which case the collector reports no peer liveness and
-// answers every probe as unavailable.
+// no tailscale client, in which case the collector reports no tailnet identity
+// and answers every probe as unavailable.
 type tailnetSource interface {
-	// Status returns this node's stable ID, its tailnet name, and the liveness
-	// of the tailnet peers it can see, from `tailscale status`.
+	// Status returns this node's stable ID, MagicDNS name and tailnet name,
+	// from `tailscale status`.
 	Status(ctx context.Context) (*tailscale.TailnetStatus, error)
 	// APIEnabled reports whether Tailscale API credentials are configured.
 	// False ⇒ the control plane is unreadable and no probe can be answered.
@@ -254,10 +254,9 @@ func controlErrorText(err error) string {
 
 // tailnetIdentity reads this node's tailscale StableNodeID and tailnet name
 // (best-effort, bounded) for the hello frame, in ONE `tailscale status` call.
-// The node ID is how the cloud splits THIS host's outages into agent_down vs
-// host_down (empty ⇒ it falls back to host_down) and how it matches this host
-// against a service's control-plane hosts; the tailnet name groups hosts that
-// share a control plane, so the cloud can probe one of them on behalf of all.
+// The node ID is how the cloud matches this host against a service's
+// control-plane hosts; the tailnet name groups hosts that share a control
+// plane, so the cloud can probe one of them on behalf of all.
 func (c *Collector) tailnetIdentity(ctx context.Context) (nodeID, tailnet string) {
 	if c.tailnet == nil {
 		return "", ""
@@ -275,8 +274,8 @@ func (c *Collector) tailnetIdentity(ctx context.Context) (nodeID, tailnet string
 // funnelHostname is this node's MagicDNS name as last read from the local
 // daemon, or "" when there is none. It is read on the snapshot path, so it is
 // cached rather than shelled out per service: the name changes about as
-// often as the machine is renamed, and the heartbeat-cadence netmap read already
-// refreshes it.
+// often as the machine is renamed, and [Collector.selfDNSNameLoop] refreshes it
+// on the heartbeat cadence.
 func (c *Collector) funnelHostname() string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -295,59 +294,35 @@ func (c *Collector) setSelfDNSName(name string) {
 	c.mu.Unlock()
 }
 
-// tailnetLoop reports the host's local-netmap peer liveness on the heartbeat
-// cadence. It is the signal the cloud uses to tell a dead agent (the device is
-// still online) from a dead host (device gone) for OTHER hosts on the tailnet.
-// Skipped while unmonitored (the cloud drops the frame) and silent when there is
-// no tailnet.
-func (c *Collector) tailnetLoop(ctx context.Context, conn *wsConn) {
+// selfDNSNameLoop re-reads this node's MagicDNS name on the heartbeat cadence,
+// so a node that only just got one (a late login, MagicDNS switched on) starts
+// reporting its Funnel destination without a reconnect. Skipped while
+// unmonitored: the cloud runs no checks for such a host.
+func (c *Collector) selfDNSNameLoop(ctx context.Context) {
 	ticker := time.NewTicker(proto.HeartbeatInterval * time.Second)
 	defer ticker.Stop()
-	c.sampleAndSendTailnet(ctx, conn)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.sampleAndSendTailnet(ctx, conn)
+			c.refreshSelfDNSName(ctx)
 		}
 	}
 }
 
-func (c *Collector) sampleAndSendTailnet(ctx context.Context, conn *wsConn) {
-	if c.tailnet == nil {
-		return
-	}
+func (c *Collector) refreshSelfDNSName(ctx context.Context) {
 	c.mu.RLock()
 	unmonitored := c.unmonitored
 	c.mu.RUnlock()
 	if unmonitored {
 		return
 	}
-	st, err := c.tailnet.Status(ctx)
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	st, err := c.tailnet.Status(cctx)
 	if err != nil || st == nil {
-		return // no tailnet → nothing to report
+		return // no tailnet → keep whatever name we last saw
 	}
-	// Same read, second use: keep the funnel destination fresh on the heartbeat
-	// cadence so a node that only just got its MagicDNS name starts reporting one.
 	c.setSelfDNSName(st.SelfDNSName)
-	peers := make([]proto.TailnetPeer, 0, len(st.Peers))
-	for _, p := range st.Peers {
-		if p.NodeID == "" {
-			continue
-		}
-		tp := proto.TailnetPeer{
-			NodeID:   p.NodeID,
-			Hostname: p.Hostname,
-			Online:   p.Online,
-		}
-		if !p.Online && !p.LastSeen.IsZero() {
-			tp.LastSeen = p.LastSeen.UnixMilli()
-		}
-		peers = append(peers, tp)
-	}
-	if len(peers) == 0 {
-		return
-	}
-	c.send(conn, proto.TypeTailnet, proto.TailnetReport{Peers: peers})
 }
