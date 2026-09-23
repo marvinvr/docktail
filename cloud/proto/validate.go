@@ -24,7 +24,7 @@ func ValidateCheckConfig(cfg CheckConfig) error {
 		return fmt.Errorf("invalid expected HTTP status")
 	}
 	if cfg.Kind == "http" {
-		if err := validateHTTPPath(cfg.Path); err != nil {
+		if err := ValidateHTTPPath(cfg.Path); err != nil {
 			return err
 		}
 	}
@@ -89,7 +89,11 @@ func SafeLogMode(mode string) string {
 	return LogModeOff
 }
 
-func validateHTTPPath(path string) error {
+// ValidateHTTPPath bounds a relative HTTP request path. It is the one rule for
+// every path the cloud puts on the wire or dials itself: the check config it
+// sends an agent, and the Funnel path the public vantage requests. An empty path
+// is valid and means "/".
+func ValidateHTTPPath(path string) error {
 	if path == "" {
 		return nil
 	}
