@@ -19,9 +19,9 @@ Reporting rides along with the normal agent — there is no separate binary. The
 
 Before you start:
 
-- **Tailscale API credentials.** Configure `TAILSCALE_OAUTH_CLIENT_ID`/`TAILSCALE_OAUTH_CLIENT_SECRET` (or `TAILSCALE_API_KEY`) first, as in [Tailscale Admin Setup](03-tailscale-admin.md#tailscale-admin-setup). Cloud's [tailnet vantage](#tailnet-health) reads the control plane through them; without them that host shows "no Tailscale credentials" instead of approval and advertisement state, and everything else still works.
+- **Tailscale API credentials.** Configure `TAILSCALE_OAUTH_CLIENT_ID`/`TAILSCALE_OAUTH_CLIENT_SECRET` (or `TAILSCALE_API_KEY`) first, as in [Tailscale Admin Setup](03-tailscale-admin.md#tailscale-admin-setup). Cloud's [tailnet vantage](#tailnet-health) reads the control plane through them, and one credentialed host per tailnet is enough. With none, Cloud reports "no Tailscale credentials" instead of approval and advertisement state; everything else still works.
 - **A working DockTail.** The host is tagged, and its services already show up on the tailnet without Cloud.
-- **A workspace and a plan.** Without a plan, the workspace's one host is a preview and is not monitored (see above).
+- **A plan, for monitoring.** You can connect the first host before choosing one; it stays an unmonitored preview until you do (see above).
 
 Then:
 
@@ -185,8 +185,8 @@ events, metrics, and incidents are unaffected.
 
 Each host is identified by its Docker engine ID, used as a stable fingerprint.
 A workspace key can enroll multiple hosts while its enrollment window is open
-(15 minutes, 1 hour, 6 hours or 24 hours, chosen when the key is created; 1 hour
-by default). After the window closes, the key continues to authenticate
+(one hour by default; the dashboard's agent key settings offer other lengths when a
+key is created or its enrollment reopened). After the window closes, the key continues to authenticate
 the hosts it already enrolled but cannot add another fingerprint until an
 operator reopens enrollment in the Cloud dashboard. An agent waiting for a
 reopened window retries automatically at a low rate.

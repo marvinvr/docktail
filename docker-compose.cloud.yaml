@@ -39,7 +39,7 @@ services:
       - TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}
       - TAILSCALE_OAUTH_CLIENT_SECRET=${TAILSCALE_OAUTH_CLIENT_SECRET}
       # Enables DockTail Cloud reporting. Without it the module is inert.
-      - DOCKTAIL_CLOUD_KEY=${DOCKTAIL_CLOUD_KEY}
+      - DOCKTAIL_CLOUD_KEY=${DOCKTAIL_CLOUD_KEY:?set DOCKTAIL_CLOUD_KEY in .env}
 
   # Example app. No published ports: DockTail proxies to the container IP.
   whoami:
@@ -49,4 +49,3 @@ services:
       - "docktail.service.enable=true"
       - "docktail.service.name=whoami"
       - "docktail.service.port=80"
-      - "docktail.service.service-port=443"

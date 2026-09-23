@@ -35,4 +35,3 @@ services:
       - "docktail.service.enable=true"
       - "docktail.service.name=whoami"
       - "docktail.service.port=80"
-      - "docktail.service.service-port=443"

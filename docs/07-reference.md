@@ -17,7 +17,7 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `LOG_LEVEL` | `info` | Logging level for all output, including the DockTail Cloud module: `debug`, `info`, `warn`, or `error`. Any other value means `info`. |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. Rootless Docker typically uses `unix:///run/user/<uid>/docker.sock`. |
-| `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | The `tailscaled` socket the [socket-loss check](#tailscale-socket-loss) probes. DockTail does not pass it to the bundled `tailscale` CLI, which does the serve and Funnel work at its own default of `/var/run/tailscale/tailscaled.sock`, so mount the daemon's socket directory at `/var/run/tailscale` either way. |
+| `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | The `tailscaled` socket DockTail checks: the startup missing-socket hint, the [socket-loss check](#tailscale-socket-loss), and the image's health check. DockTail does not pass it to the bundled `tailscale` CLI, which does the serve and Funnel work at its own default of `/var/run/tailscale/tailscaled.sock`, so mount the daemon's socket directory at `/var/run/tailscale` either way. |
 | `EXIT_ON_SOCKET_LOSS` | `true` | When `true`, DockTail exits if the Tailscale socket stays unreachable past the grace period, so the container's restart policy can re-establish the mount. See [Tailscale Socket Loss](#tailscale-socket-loss). |
 | `SOCKET_LOSS_GRACE_PERIOD` | `90s` | How long the Tailscale socket may stay unreachable before DockTail exits. Must be longer than a normal `tailscaled` restart. |
 

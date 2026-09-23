@@ -36,7 +36,7 @@ services:
 
 - **One DockTail per `tailscaled`.** One instance watches one engine. If rootful and rootless Podman (or Podman and Docker) run on the same host, a second DockTail against the same `tailscaled` will fight the first over which services the node serves. `IGNORE_SERVICE_NAMES` on each instance keeps them apart; separate machines or VMs, each with its own Tailscale node, avoid the problem.
 - **Rootless Podman** has the same two issues as [Rootless Docker](02-installation.md#rootless-docker): the host's `tailscaled` must trust the user (`tailscale set --operator`), and container IPs are often unreachable from the host, so use `docktail.service.direct=false` with a published port or run the Tailscale sidecar on the app's network.
-- **SELinux.** On an enforcing host (Fedora, RHEL and derivatives), a container cannot connect to a host socket it has mounted unless SELinux labelling is relaxed for it, for example with `security_opt: [label=disable]` on the DockTail container.
+- **SELinux.** On an enforcing host (Fedora, RHEL and derivatives), SELinux normally keeps a container from connecting to a host socket it has mounted; relaxing labelling for the DockTail container (`security_opt: [label=disable]`) is the usual fix. Not tested with DockTail.
 - DockTail Cloud reporting with Podman has not been tested.
 
 ### Synology
@@ -49,7 +49,7 @@ The sidecar needs `/dev/net/tun`. If the `tailscale` container logs that it is m
 
 ### Unraid
 
-Reported working with the Tailscale plugin on the host. The plugin's `tailscaled` socket is at `/var/run/tailscale/tailscaled.sock`, so the [Tailscale On Host](02-installation.md#tailscale-on-host) setup applies, either as a Compose stack (Compose Manager plugin) or as a container added from the Docker tab:
+Reported to reach the host's `tailscaled` at `/var/run/tailscale` with the [Tailscale On Host](02-installation.md#tailscale-on-host) setup; the one problem reported was an untagged node (below). The rest of this section is not tested by the maintainers. DockTail can run as a Compose stack (Compose Manager plugin) or as a container added from the Docker tab:
 
 | Setting | Value |
 | --- | --- |
@@ -80,13 +80,13 @@ Supported with the [Tailscale Sidecar](02-installation.md#tailscale-sidecar) onl
 
 ### Docker Swarm
 
-No native Swarm support: DockTail reads **container** labels from the engine it is connected to, so it sees only the tasks running on its own node and ignores service-level `deploy.labels`. Users have reported this layout working on multi-node clusters:
+No native Swarm support: DockTail reads **container** labels from the engine it is connected to, so it sees only the tasks running on its own node and ignores service-level `deploy.labels`. The layout below is based on the one users reported working on multi-node clusters in [issue #43](https://github.com/marvinvr/docktail/issues/43):
 
 - Run DockTail as a `global` service, so every node has one, each with its own `tailscaled` — installed on the host, or a `global` sidecar as below. Each node joins the tailnet as a tagged device.
 - Put the `docktail.*` labels under the service's top-level `labels:`, which Swarm applies to each task container, not under `deploy.labels`.
 - Every node that runs a replica advertises the service, and Tailscale Services routes each client to one of the advertising hosts.
 - Allow at most one replica of a labelled service per node (`deploy.placement.max_replicas_per_node: 1`, or `mode: global`). Two replicas on one node claim the same service name and port, which DockTail treats as a conflict and does not resolve ([Service Name Conflicts Between Containers](04-labels.md#service-name-conflicts-between-containers)).
-- Do not use `update_config.order: start-first` for the `tailscale` service: it briefly runs two daemons on the same node and state volume.
+- Avoid `update_config.order: start-first` for the `tailscale` service. It briefly runs two daemons on the same node and state volume; the working reports use the default order.
 
 ```yaml
 services:
@@ -97,6 +97,7 @@ services:
       - TS_EXTRA_ARGS=--advertise-tags=tag:server
       - TS_STATE_DIR=/var/lib/tailscale
       - TS_SOCKET=/var/run/tailscale/tailscaled.sock
+      - TS_USERSPACE=false
     volumes:
       - tailscale-state:/var/lib/tailscale
       - tailscale-socket:/var/run/tailscale

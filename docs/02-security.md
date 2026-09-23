@@ -4,7 +4,7 @@ DockTail needs two sockets, and both are powerful. This section says what they g
 
 ### The Docker Socket
 
-Every example mounts `/var/run/docker.sock:ro`. The `:ro` flag makes the socket file read-only, which does not matter for a socket: it does not stop anyone from connecting to it, and a connection gets the full Docker API — start, exec, create privileged containers. Treat access to the Docker socket as root on the host.
+Every example mounts `/var/run/docker.sock:ro`. The `:ro` flag makes the bind mount read-only, which does not matter for a socket: it does not stop anyone from connecting to it, and a connection gets the full Docker API — start, exec, create privileged containers. Treat access to the Docker socket as root on the host.
 
 DockTail itself only reads from it: it lists and inspects containers and follows container events, and with [DockTail Cloud](06-cloud.md#docktail-cloud) on it also reads engine info and version, one-shot container stats, and log tails. It never creates, starts, stops or execs anything. To make that a guarantee rather than a property of the code, put a read-only proxy in front of the socket.
 
@@ -22,7 +22,7 @@ services:
     environment:
       - CONTAINERS=1 # list, inspect, stats, logs
       - INFO=1       # DockTail Cloud only: engine ID and host specs
-      - EVENTS=1     # default; container start/stop/die/oom/health events
+      - EVENTS=1     # default; container start/stop/die/restart/oom/health events
       - PING=1       # default; API version negotiation
       - VERSION=1    # default
       - POST=0       # default; read-only
@@ -41,6 +41,7 @@ services:
       - TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}
       - TAILSCALE_OAUTH_CLIENT_SECRET=${TAILSCALE_OAUTH_CLIENT_SECRET}
     networks:
+      - default    # outbound: the Tailscale API and DockTail Cloud
       - docker-api
 
 networks:
@@ -48,7 +49,7 @@ networks:
     internal: true
 ```
 
-- Keep the proxy on an `internal` network that only DockTail joins, and never publish port 2375: anyone who can reach it can read what DockTail reads.
+- Keep the proxy on an `internal` network that only DockTail joins, and never publish port 2375: anyone who can reach it can read what DockTail reads. DockTail itself also stays on a normal network, since it calls the Tailscale API (and DockTail Cloud) over the internet.
 - Read-only is not the same as harmless. `CONTAINERS=1` allows every `GET` under `/containers`: inspecting any container (including environment variables that may hold other apps' secrets), reading its logs, and downloading files from it through the archive and export endpoints.
 - If the proxy closes the event stream, DockTail logs `Docker event stream error` and reconnects after five seconds; the periodic reconcile covers anything that changed in between.
 
@@ -66,6 +67,4 @@ services:
       - no-new-privileges:true
 ```
 
-Dropping `CAP_DAC_OVERRIDE` also takes away root's ability to read files it does not own. Credential files loaded through `*_FILE` or `FILE__*` must then be owned by root or readable by everyone inside the container; Docker Swarm secrets are, by default. A `0600` file owned by your own user, bind-mounted from the host, is not, and DockTail exits at startup when it cannot read it.
-
-Running DockTail as a non-root `user:` instead is possible under the same conditions as [Rootless Docker](02-installation.md#rootless-docker): that user needs access to the Docker socket (or the proxy), and with Tailscale on the host it must be the Tailscale operator.
+Dropping `CAP_DAC_OVERRIDE` also makes root subject to ordinary file permission bits. Credential files loaded through `*_FILE` or `FILE__*` must then be owned by root or readable by everyone inside the container; Docker Swarm secrets are, by default. A `0600` file owned by your own user, bind-mounted from the host, is not, and DockTail exits at startup when it cannot read it.
