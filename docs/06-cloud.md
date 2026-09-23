@@ -193,7 +193,7 @@ reports fewer signals.
 When Cloud refuses a connection, the agent logs the reason code and what to do
 about it (`cloud: connection rejected. …` when it will retry,
 `cloud: stopped reporting until this container restarts. …` when it will not).
-The explanation repeats every 30 minutes, so it stays near the end of
+The explanation repeats about every 30 minutes, so it stays near the end of
 `docker logs`. DockTail itself keeps serving your services either way; only
 reporting stops.
 

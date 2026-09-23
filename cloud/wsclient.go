@@ -48,8 +48,8 @@ type wsConn struct {
 	startedAt time.Time
 }
 
-// dialError carries the HTTP status of a failed upgrade so callers can decide
-// between back off (5xx) and stop (401/403, see httpRejection).
+// dialError carries the HTTP status of a failed upgrade so callers can tell a
+// rejection (401/403, see httpRejection) from a retryable failure.
 type dialError struct {
 	statusCode int
 	err        error
