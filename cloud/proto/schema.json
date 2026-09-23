@@ -134,7 +134,7 @@
         "ok": { "type": "boolean" },
         "latency_ms": { "type": "integer" },
         "status_code": { "type": "integer" },
-        "class": { "type": "string", "enum": ["dns", "timeout", "refused", "tls", "http_5xx", "acl_blocked", "serve", "container"] },
+        "class": { "type": "string", "enum": ["dns", "timeout", "refused", "tls", "http_5xx", "http_status", "acl_blocked", "serve", "container"] },
         "error": { "type": "string" },
         "checked_at": { "type": "integer" }
       }
