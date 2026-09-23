@@ -4,6 +4,8 @@ DockTail Cloud is optional, opt-in monitoring for DockTail-managed services acro
 
 [Explore DockTail Cloud](https://docktail.org/cloud/) or [open the dashboard](https://cloud.docktail.org/login).
 
+DockTail Cloud is a paid service, priced by host count ([plans and pricing](https://docktail.org/cloud/#pricing)); the agent code that reports to it is the same open-source DockTail. Until you choose a plan, a new workspace can connect one host as a preview: it shows up online, but Cloud runs no checks and raises no incidents or alerts for it. A workspace's first subscription can come with an introductory offer, such as a free trial or a reduced first-months price; the dashboard shows which one applies when you choose a plan.
+
 ### What You Get
 
 - **One view of every host and service.** The full catalog of DockTail-managed services, plus a read-only inventory of the host's other containers, with health history.
@@ -15,10 +17,18 @@ Reporting rides along with the normal agent — there is no separate binary. The
 
 ### How To Enable
 
+Before you start:
+
+- **Tailscale API credentials.** Configure `TAILSCALE_OAUTH_CLIENT_ID`/`TAILSCALE_OAUTH_CLIENT_SECRET` (or `TAILSCALE_API_KEY`) first, as in [Tailscale Admin Setup](03-tailscale-admin.md#tailscale-admin-setup). Cloud's [tailnet vantage](#tailnet-health) reads the control plane through them, and one credentialed host per tailnet is enough. With none, Cloud reports "no Tailscale credentials" instead of approval and advertisement state; everything else still works.
+- **A working DockTail.** The host is tagged, and its services already show up on the tailnet without Cloud.
+- **A plan, for monitoring.** You can connect the first host before choosing one; it stays an unmonitored preview until you do (see above).
+
+Then:
+
 1. Create a workspace in the DockTail Cloud dashboard and copy the workspace key (`dtc_...`).
 2. Set `DOCKTAIL_CLOUD_KEY` on the DockTail agent.
 
-That is the only configuration — the cloud endpoint is built into the agent.
+That is the only configuration — the cloud endpoint is built into the agent. A complete Compose file with it is [`docker-compose.cloud.yaml`](https://github.com/marvinvr/docktail/blob/main/docker-compose.cloud.yaml).
 
 ```yaml
 services:
@@ -48,7 +58,7 @@ connection when that changes; the agent does not need a restart.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `DOCKTAIL_CLOUD_KEY` | - | Workspace key (`dtc_...`) from the cloud dashboard. Enables reporting. Inert when unset. |
-| `DOCKTAIL_LOG_LEVEL` | `info` | Log level for the cloud module: `debug`, `info`, `warn`, or `error`. |
+| `DOCKTAIL_LOG_LEVEL` | `info` | Read, but currently has no effect: the cloud module logs at the level `LOG_LEVEL` sets. |
 | `DOCKTAIL_CHECK_INTERVAL` | `30s` | How often local-vantage checks run (5s–5m). |
 | `DOCKTAIL_HOST_ROOT` | `/host` | Where the host's root filesystem is bind-mounted, for whole-host disk usage (see [Disk Usage](#disk-usage)). Only used when that path exists. |
 
@@ -175,7 +185,8 @@ events, metrics, and incidents are unaffected.
 
 Each host is identified by its Docker engine ID, used as a stable fingerprint.
 A workspace key can enroll multiple hosts while its enrollment window is open
-(one hour by default). After the window closes, the key continues to authenticate
+(one hour by default; the dashboard's agent key settings offer other lengths when a
+key is created or its enrollment reopened). After the window closes, the key continues to authenticate
 the hosts it already enrolled but cannot add another fingerprint until an
 operator reopens enrollment in the Cloud dashboard. An agent waiting for a
 reopened window retries automatically at a low rate.

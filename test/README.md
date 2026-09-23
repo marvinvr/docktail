@@ -17,7 +17,7 @@ Both containers:
 
 ## Usage
 
-These are referenced in the root `docker-compose.yaml` and serve as examples for:
+These are referenced in the root `docker-compose.dev.yaml` and serve as examples for:
 - Port publishing requirements
 - Label configuration
 - Multi-instance service setup

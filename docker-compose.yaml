@@ -1,116 +1,37 @@
-version: '3.8'
+# DockTail on a Linux host that already runs Tailscale.
+#
+# Usage:
+#   1. Tag the host and set up the tailnet policy:
+#      https://docktail.org/docs/#tailscale-admin-setup
+#   2. Copy .env.example to .env and set the Tailscale OAuth credentials.
+#   3. docker compose up -d
+#
+# No Tailscale on the host (macOS, Windows, most NAS devices)? Use
+# docker-compose.sidecar.yaml instead. Want monitoring and alerting from
+# DockTail Cloud? See docker-compose.cloud.yaml. Building DockTail itself?
+# docker-compose.dev.yaml is the development stack.
 
 services:
-  # DockTail service
-  dev-docktail:
-    build: .
-    container_name: dev-docktail
+  docktail:
+    image: ghcr.io/marvinvr/docktail:latest
+    container_name: docktail
+    # Required: DockTail exits on purpose when it loses the Tailscale socket and
+    # relies on the restart policy to come back with a fresh mount.
     restart: unless-stopped
     volumes:
-      # Docker socket for container monitoring
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # Tailscale socket directory (directory mount survives tailscaled restarts)
+      # Mount the directory, not the socket file.
       - /var/run/tailscale:/var/run/tailscale
     environment:
-      - LOG_LEVEL=debug
-      - RECONCILE_INTERVAL=60s
+      # Optional but recommended. Lets DockTail create Service definitions.
+      - TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}
+      - TAILSCALE_OAUTH_CLIENT_SECRET=${TAILSCALE_OAUTH_CLIENT_SECRET}
 
-  # Example: Direct mode (default) - no ports needed!
-  web1:
-    build: ./test/nginx-web1
-    container_name: web1
+  # Example app. No published ports: DockTail proxies to the container IP.
+  whoami:
+    image: traefik/whoami:latest
     restart: unless-stopped
-    # No ports needed - DockTail proxies directly to container IP
     labels:
       - "docktail.service.enable=true"
-      - "docktail.service.name=test-web1"
+      - "docktail.service.name=whoami"
       - "docktail.service.port=80"
-      - "docktail.service.protocol=http"
-      - "docktail.service.service-port=80"
-      - "docktail.service.service-protocol=http"
-
-  # Example: Direct mode with HTTPS (using smart defaults)
-  web2:
-    build: ./test/nginx-web2
-    container_name: web2
-    restart: unless-stopped
-    # No ports needed - DockTail proxies directly to container IP
-    labels:
-      - "docktail.service.enable=true"
-      - "docktail.service.name=test-web2"
-      - "docktail.service.port=80"
-      - "docktail.service.service-protocol=https"
-      # service-port defaults to "443" (based on service-protocol=https)
-
-  # Example: Serve + Funnel (both tailnet AND public internet access)
-  web-public:
-    build: ./test/nginx-web1
-    container_name: web-public
-    restart: unless-stopped
-    # No ports needed - direct mode handles both serve and funnel
-    labels:
-      # Serve configuration (tailnet-only):
-      - "docktail.service.enable=true"
-      - "docktail.service.name=public-demo"
-      - "docktail.service.port=80"
-      - "docktail.service.service-port=443"
-
-      # Funnel configuration (public internet):
-      - "docktail.funnel.enable=true"
-      - "docktail.funnel.port=80"
-
-  # Example: TCP service with direct mode
-  test-tcp:
-    image: nginx:latest
-    container_name: test-tcp
-    restart: unless-stopped
-    # No ports needed
-    labels:
-      - "docktail.service.enable=true"
-      - "docktail.service.name=test-tcp"
-      - "docktail.service.port=80"
-      - "docktail.service.protocol=tcp"
-
-  # Example: Legacy mode (published ports) - opt out of direct mode
-  test-legacy:
-    image: nginx:latest
-    container_name: test-legacy
-    restart: unless-stopped
-    ports:
-      - "9080:80"  # Required when direct=false
-    labels:
-      - "docktail.service.enable=true"
-      - "docktail.service.name=test-legacy"
-      - "docktail.service.port=80"
-      - "docktail.service.direct=false"  # Use published port instead of container IP
-
-  # Example: Custom Docker network
-  test-custom-network:
-    image: nginx:latest
-    container_name: test-custom-network
-    restart: unless-stopped
-    networks:
-      - backend
-    labels:
-      - "docktail.service.enable=true"
-      - "docktail.service.name=test-custom-net"
-      - "docktail.service.port=80"
-      - "docktail.service.network=backend"  # Specify which network to use
-
-  # Example: Host networking mode
-  test-host-network:
-    image: nginx:latest
-    container_name: test-host-network
-    restart: unless-stopped
-    network_mode: host
-    labels:
-      - "docktail.service.enable=true"
-      - "docktail.service.name=test-host"
-      - "docktail.service.port=80"
-      # Host network uses localhost directly
-
-networks:
-  backend:
-
-volumes:
-  postgres-data:
