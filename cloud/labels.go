@@ -125,11 +125,11 @@ func applyLabelIntent(serviceKey string, base *proto.CheckConfig, intent *proto.
 
 // intentForService narrows a container's label intent to one of the services
 // it publishes. Cloud labels are container-wide, but a service whose backend
-// speaks raw TCP (docktail.service[.N].protocol=tcp) cannot answer an HTTP
-// check, so for it an HTTP-shaping label (kind http, a path, an expected
+// speaks TCP (docktail.service[.N].protocol=tcp or tls-terminated-tcp) cannot
+// answer a plain HTTP check, so for it an HTTP-shaping label (kind http, a path, an expected
 // status) is dropped and it keeps its TCP check; logs=off still applies.
 func intentForService(intent *proto.LabelIntent, backendProtocol string) *proto.LabelIntent {
-	if intent == nil || !strings.EqualFold(backendProtocol, "tcp") {
+	if p := strings.ToLower(backendProtocol); intent == nil || (p != "tcp" && p != "tls-terminated-tcp") {
 		return intent
 	}
 	out := *intent

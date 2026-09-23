@@ -123,7 +123,7 @@ func TestIntentForService(t *testing.T) {
 	if got == nil || *got != (proto.LabelIntent{Logs: "off"}) {
 		t.Fatalf("tcp backend: got %+v, want logs only", got)
 	}
-	if got := intentForService(&proto.LabelIntent{CheckPath: "/healthz"}, "tcp"); got != nil {
+	if got := intentForService(&proto.LabelIntent{CheckPath: "/healthz"}, "tls-terminated-tcp"); got != nil {
 		t.Fatalf("tcp backend with only HTTP intent: got %+v, want nil", got)
 	}
 }
