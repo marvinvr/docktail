@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -513,7 +514,7 @@ func (c *Client) ContainerStats(ctx context.Context, containerID string) (Contai
 		CPUSystemUsage: v.CPUStats.SystemUsage,
 		OnlineCPUs:     onlineCPUs,
 		MemUsageBytes:  memUsageNoCache(v.MemoryStats),
-		MemLimitBytes:  int64(v.MemoryStats.Limit),
+		MemLimitBytes:  saturatingInt64(v.MemoryStats.Limit),
 	}, nil
 }
 
@@ -523,12 +524,21 @@ func (c *Client) ContainerStats(ctx context.Context, containerID string) (Contai
 // back to the raw usage when neither is present.
 func memUsageNoCache(mem container.MemoryStats) int64 {
 	if v, ok := mem.Stats["total_inactive_file"]; ok && v < mem.Usage { // cgroup v1
-		return int64(mem.Usage - v)
+		return saturatingInt64(mem.Usage - v)
 	}
 	if v, ok := mem.Stats["inactive_file"]; ok && v < mem.Usage { // cgroup v2
-		return int64(mem.Usage - v)
+		return saturatingInt64(mem.Usage - v)
 	}
-	return int64(mem.Usage)
+	return saturatingInt64(mem.Usage)
+}
+
+// saturatingInt64 converts a byte count from the Docker API (uint64) to the int64 the
+// cloud report carries, saturating instead of wrapping to a negative value.
+func saturatingInt64(u uint64) int64 {
+	if u > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(u)
 }
 
 // ContainerLogsTail returns the last n log lines of a container plus the total

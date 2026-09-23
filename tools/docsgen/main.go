@@ -82,13 +82,13 @@ func main() {
 	data := pageData{
 		Title:       title,
 		Description: "Documentation for DockTail, a tool that automatically exposes Docker containers as Tailscale Services using label-based configuration.",
-		Body:        template.HTML(rendered),
+		Body:        template.HTML(rendered), //nolint:gosec // G203: HTML rendered from this repo's own docs/*.md
 		Headings:    headings,
 		Sections:    buildSidebar(specs),
 		GeneratedAt: generatedAt,
 	}
 
-	if err := os.MkdirAll(filepath.Join(*websiteDir, "docs"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(*websiteDir, "docs"), 0o755); err != nil { //nolint:gosec // G301: public website output, served as static files
 		fatal(err)
 	}
 
@@ -121,7 +121,7 @@ func readMarkdown(sourceDir string) (string, error) {
 
 	var out strings.Builder
 	for i, path := range matches {
-		body, err := os.ReadFile(path)
+		body, err := os.ReadFile(path) //nolint:gosec // G304: path comes from globbing the docs source dir
 		if err != nil {
 			return "", err
 		}
@@ -234,7 +234,7 @@ func readFileSpecs(sourceDir string) ([]fileSpec, error) {
 
 	specs := make([]fileSpec, 0, len(matches))
 	for _, path := range matches {
-		body, err := os.ReadFile(path)
+		body, err := os.ReadFile(path) //nolint:gosec // G304: path comes from globbing the docs source dir
 		if err != nil {
 			return nil, err
 		}
@@ -391,7 +391,7 @@ func renderSitemap(lastmod string) string {
 }
 
 func writeFile(path, content string) error {
-	return os.WriteFile(path, []byte(content), 0o644)
+	return os.WriteFile(path, []byte(content), 0o644) //nolint:gosec // G306: public website output, served as static files
 }
 
 func fatal(err error) {

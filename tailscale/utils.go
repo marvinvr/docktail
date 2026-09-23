@@ -18,7 +18,9 @@ import (
 // tailscaled has been detected, it sets TS_DEBUG_FAKE_IPC_VERSION so the CLI
 // doesn't reject the connection.
 func (c *Client) tailscaleCmd(ctx context.Context, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "tailscale", args...)
+	// No shell is involved: the arguments are built by this package and passed
+	// to the fixed tailscale binary as separate argv entries.
+	cmd := exec.CommandContext(ctx, "tailscale", args...) //nolint:gosec // G204: fixed binary, argv only
 	if sv := c.getServerVersion(); sv != "" {
 		cmd.Env = append(os.Environ(), "TS_DEBUG_FAKE_IPC_VERSION="+sv)
 	}

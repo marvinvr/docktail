@@ -25,10 +25,21 @@ jobs:
           - runner: ubuntu-24.04-arm
             platform: linux/arm64
             arch: arm64
+          # No 32-bit ARM runner: the Go binary is cross-compiled on the build
+          # platform, so QEMU only runs the runtime stage's package install.
+          - runner: ubuntu-latest
+            platform: linux/arm/v7
+            arch: armv7
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        if: matrix.arch == 'armv7'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -85,8 +96,8 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             VERSION=${{ github.ref_name }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
   manifest:
     needs: build
@@ -133,5 +144,6 @@ jobs:
           for TAG in $TAGS; do
             docker buildx imagetools create -t $TAG \
               $TAG-amd64 \
-              $TAG-arm64
+              $TAG-arm64 \
+              $TAG-armv7
           done

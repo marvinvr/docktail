@@ -269,7 +269,7 @@ type backoff struct {
 }
 
 func newBackoff() *backoff {
-	return &backoff{rng: rand.New(rand.NewSource(time.Now().UnixNano()))}
+	return &backoff{rng: rand.New(rand.NewSource(time.Now().UnixNano()))} //nolint:gosec // G404: reconnect jitter only spreads agents apart; it is not a secret
 }
 
 func (b *backoff) next() time.Duration {

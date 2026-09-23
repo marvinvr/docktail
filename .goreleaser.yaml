@@ -1,0 +1,51 @@
+# Static release binaries, attached to each published GitHub release by
+# .github/workflows/release.yaml. GoReleaser only builds and packages; the
+# workflow uploads the archives to the release the maintainer published, so the
+# release name and notes stay as written.
+version: 2
+
+project_name: docktail
+
+builds:
+  - id: docktail
+    main: .
+    binary: docktail
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+      - arm
+    goarm:
+      - "7"
+    flags:
+      - -trimpath
+    # Same version stamp as the image (Dockerfile VERSION build arg = the tag);
+    # a snapshot build is stamped with its snapshot version instead.
+    ldflags:
+      - -s -w -X github.com/marvinvr/docktail/version.Version={{ if .IsSnapshot }}{{ .Version }}{{ else }}{{ .Tag }}{{ end }}
+
+archives:
+  - id: docktail
+    formats:
+      - tar.gz
+    # docktail_1.9.0_linux_amd64.tar.gz, …_linux_arm64, …_linux_armv7
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}{{ with .Arm }}v{{ . }}{{ end }}
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  disable: true
+
+release:
+  disable: true

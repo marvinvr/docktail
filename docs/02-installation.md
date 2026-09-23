@@ -106,3 +106,25 @@ volumes:
 Set `TAILSCALE_AUTH_KEY` to authenticate the Tailscale container. Generate it in the Tailscale Admin Console under Settings -> Keys. The sidecar should advertise `tag:server` so it can satisfy the ACL auto-approver example below.
 
 The sidecar uses `network_mode: host` so it can reach container IPs on any Docker network. On Docker Desktop this requires enabling host networking under Settings -> Resources -> Network. Alternatively, remove `network_mode: host` and attach the sidecar to the same Docker network as the containers you expose. On rootless Docker, prefer the shared-network form; host networking is limited in that mode.
+
+### Platforms And Release Binaries
+
+The image `ghcr.io/marvinvr/docktail` is published for `linux/amd64`, `linux/arm64` and `linux/arm/v7` (Raspberry Pi 2/3 and older 32-bit ARM NAS devices). Docker picks the right one automatically; the setups above work unchanged on all three.
+
+Each [GitHub release](https://github.com/marvinvr/docktail/releases) also carries static Linux binaries for the same three architectures (`docktail_<version>_linux_amd64.tar.gz`, `…_linux_arm64.tar.gz`, `…_linux_armv7.tar.gz`) plus a `checksums.txt`. Use them to run DockTail directly on a Linux host instead of in a container:
+
+```bash
+VERSION=1.9.0  # the release you want
+curl -fsSLO "https://github.com/marvinvr/docktail/releases/download/${VERSION}/docktail_${VERSION}_linux_amd64.tar.gz"
+curl -fsSL "https://github.com/marvinvr/docktail/releases/download/${VERSION}/checksums.txt" | sha256sum --check --ignore-missing
+tar -xzf "docktail_${VERSION}_linux_amd64.tar.gz" docktail
+sudo install docktail /usr/local/bin/docktail
+```
+
+The binary behaves like the container and reads the same [environment variables](07-reference.md#environment-variables). Running outside a container it additionally needs:
+
+- the `tailscale` CLI on the `PATH`, which the host's Tailscale install provides — the image bundles its own copy, the binary does not;
+- read access to the Docker socket (`/var/run/docker.sock`) and access to the `tailscaled` socket (`TAILSCALE_SOCKET`, default `/var/run/tailscale/tailscaled.sock`), so run it as root or as a user in the `docker` group who is the Tailscale operator (`sudo tailscale set --operator=$USER`);
+- something to keep it running, such as a systemd service with `Restart=always`, because DockTail [exits on purpose](07-reference.md#tailscale-socket-loss) when it loses the `tailscaled` socket.
+
+Setting up the host's tailnet tag and the Tailscale admin side is the same as for [Tailscale On Host](#tailscale-on-host).

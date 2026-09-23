@@ -53,6 +53,45 @@ func (c *Client) ProbeSocket() error {
 	return nil
 }
 
+// WaitForSocket blocks until the tailscaled socket accepts a connection, the
+// timeout elapses, or ctx is cancelled, probing every interval. It returns the
+// last probe error when the socket never became reachable, or ctx.Err().
+//
+// DockTail usually starts alongside tailscaled (a sidecar behind a plain
+// depends_on, or a host that is still booting), so the daemon may not be
+// listening yet. Without this wait the startup version check would miss a
+// CLI/daemon mismatch and the first reconcile would fail, leaving services
+// unadvertised until the next reconcile interval.
+func (c *Client) WaitForSocket(ctx context.Context, timeout, interval time.Duration) error {
+	err := c.ProbeSocket()
+	if err == nil {
+		return nil
+	}
+	log.Info().Err(err).
+		Str("socket", c.socketPath).
+		Dur("timeout", timeout).
+		Msg("Waiting for the Tailscale socket to become reachable")
+
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline.C:
+			return err
+		case <-ticker.C:
+			if err = c.ProbeSocket(); err == nil {
+				log.Info().Str("socket", c.socketPath).Msg("Tailscale socket is reachable")
+				return nil
+			}
+		}
+	}
+}
+
 // SocketWatchdogConfig configures the watchdog.
 type SocketWatchdogConfig struct {
 	// Enabled switches the watchdog on. When false, Run returns immediately.
