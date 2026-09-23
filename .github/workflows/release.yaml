@@ -3,10 +3,17 @@ name: Release Binaries
 # Attaches static Linux binaries to a GitHub release once it is published. Tags
 # alone only produce images (docker-build.yaml); binaries follow the releases
 # the maintainer publishes, and the release's name and notes are left as written.
+# Run it by hand to (re)attach binaries to an existing release whose tag already
+# contains .goreleaser.yaml.
 on:
   release:
     types:
       - published
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag of an existing GitHub release
+        required: true
 
 jobs:
   binaries:
@@ -14,13 +21,13 @@ jobs:
     permissions:
       contents: write
     env:
-      TAG: ${{ github.event.release.tag_name }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          ref: refs/tags/${{ github.event.release.tag_name }}
+          ref: refs/tags/${{ env.TAG }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -35,7 +42,7 @@ jobs:
           version: '~> v2'
           args: release --clean --skip=publish
         env:
-          GORELEASER_CURRENT_TAG: ${{ github.event.release.tag_name }}
+          GORELEASER_CURRENT_TAG: ${{ env.TAG }}
 
       - name: Attach archives to the release
         env:

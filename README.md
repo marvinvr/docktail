@@ -174,7 +174,7 @@ go build -o docktail .
 docker build -t docktail:latest .
 ```
 
-The image is published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`, and each [release](https://github.com/marvinvr/docktail/releases) carries static Linux binaries for the same platforms; see [Platforms And Release Binaries](docs/02-installation.md#platforms-and-release-binaries).
+The image is published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`, and [releases](https://github.com/marvinvr/docktail/releases) newer than 1.8.3 carry static Linux binaries for the same platforms; see [Platforms And Release Binaries](docs/02-installation.md#platforms-and-release-binaries).
 
 ## Links
 

@@ -59,9 +59,8 @@ func (c *Client) ProbeSocket() error {
 //
 // DockTail usually starts alongside tailscaled (a sidecar behind a plain
 // depends_on, or a host that is still booting), so the daemon may not be
-// listening yet. Without this wait the startup version check would miss a
-// CLI/daemon mismatch and the first reconcile would fail, leaving services
-// unadvertised until the next reconcile interval.
+// listening yet. Without this wait the first reconcile would fail, leaving
+// services unadvertised until the next reconcile interval.
 func (c *Client) WaitForSocket(ctx context.Context, timeout, interval time.Duration) error {
 	err := c.ProbeSocket()
 	if err == nil {

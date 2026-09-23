@@ -145,12 +145,18 @@ func main() {
 	// the wait exits cleanly: nothing has been advertised yet that would need
 	// cleaning up.
 	waitCtx, stopWait := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	_ = tailscaleClient.WaitForSocket(waitCtx, socketStartupWait, 250*time.Millisecond)
+	waitErr := tailscaleClient.WaitForSocket(waitCtx, socketStartupWait, 250*time.Millisecond)
 	interrupted := waitCtx.Err() != nil
 	stopWait()
 	if interrupted {
 		log.Info().Msg("Received shutdown signal while waiting for the Tailscale socket, exiting")
 		return
+	}
+	if waitErr != nil {
+		log.Warn().Err(waitErr).
+			Str("socket", tailscaleSocket).
+			Dur("waited", socketStartupWait).
+			Msg("Tailscale socket is still unreachable; starting anyway and retrying on every reconcile")
 	}
 
 	// Detect CLI/daemon version mismatch (common with host-mode Tailscale)
