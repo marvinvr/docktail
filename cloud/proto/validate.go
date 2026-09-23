@@ -123,3 +123,45 @@ func containsControl(value string) bool {
 	}
 	return false
 }
+
+// SanitizeLabelIntent returns intent with every invalid field cleared, or nil
+// when nothing valid remains; rejected counts the cleared fields. The agent
+// applies it to what it parsed from labels, and the cloud again to what it
+// received, so neither trusts the other's copy. A path or expected status
+// beside CheckKind "tcp" is meaningless and is cleared too.
+func SanitizeLabelIntent(intent *LabelIntent) (valid *LabelIntent, rejected int) {
+	if intent == nil {
+		return nil, 0
+	}
+	out := *intent
+	if out.Logs != "" && out.Logs != LogModeOff {
+		out.Logs = ""
+		rejected++
+	}
+	if out.CheckKind != "" && out.CheckKind != "tcp" && out.CheckKind != "http" {
+		out.CheckKind = ""
+		rejected++
+	}
+	if out.CheckPath != "" && ValidateHTTPPath(out.CheckPath) != nil {
+		out.CheckPath = ""
+		rejected++
+	}
+	if out.CheckExpectStatus != 0 && (out.CheckExpectStatus < 100 || out.CheckExpectStatus > 599) {
+		out.CheckExpectStatus = 0
+		rejected++
+	}
+	if out.CheckKind == "tcp" {
+		if out.CheckPath != "" {
+			out.CheckPath = ""
+			rejected++
+		}
+		if out.CheckExpectStatus != 0 {
+			out.CheckExpectStatus = 0
+			rejected++
+		}
+	}
+	if out == (LabelIntent{}) {
+		return nil, rejected
+	}
+	return &out, rejected
+}

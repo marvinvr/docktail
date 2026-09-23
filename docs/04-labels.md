@@ -115,3 +115,30 @@ Funnel notes:
 - Funnel URLs use the machine hostname, not the Tailscale service name.
 - Funnel-only containers can omit `docktail.service.enable` and other `docktail.service.*` labels.
 - `docktail.service.direct` and `docktail.service.network` still control how DockTail reaches the backend for Funnel traffic.
+
+### DockTail Cloud Labels
+
+With [DockTail Cloud](06-cloud.md) enabled, `docktail.cloud.*` labels declare how Cloud monitors a container, next to the rest of its configuration. They change nothing about what DockTail serves on your tailnet, and are ignored when Cloud is not enabled.
+
+| Label | Values | Description |
+| --- | --- | --- |
+| `docktail.cloud.ignore` | `true` / `false` | `true` keeps the container out of Cloud monitoring: it is not reported as a service, is never checked, captures no logs, and cannot be watched. It still appears in the host's container inventory, marked as ignored by label, and its Docker events (start, stop, exit) still show in the activity log like any other container's. |
+| `docktail.cloud.logs` | `off` | Never capture incident log excerpts for this container. Capture can only be switched *on* in the Cloud dashboard. |
+| `docktail.cloud.check.kind` | `tcp` / `http` | Kind of local check. Without the label, the dashboard's setting applies, else `tcp`. |
+| `docktail.cloud.check.path` | `/path` | Path the HTTP check requests. Must start with `/`. Implies `check.kind=http`. |
+| `docktail.cloud.check.expect-status` | `100`–`599` | The only HTTP status that counts as up. Without it, any status below 500 is up. Implies `check.kind=http`. |
+
+```yaml
+labels:
+  - "docktail.service.enable=true"
+  - "docktail.service.name=api"
+  - "docktail.service.port=8000"
+  - "docktail.cloud.check.path=/healthz"
+  - "docktail.cloud.logs=off"
+```
+
+A label wins over the dashboard for the setting it names: while `docktail.cloud.logs=off` is set, the dashboard shows that service's log capture as set by label and dashboard changes to it do not apply. Settings without a label keep their dashboard value.
+
+The check always targets the port DockTail already probes for the service; labels choose only how it is checked, never where. Cloud labels apply to every service a container publishes, including [numbered services](#multiple-services-from-one-container) — except that a service whose backend protocol is `tcp` keeps its TCP check whatever the HTTP check labels say. An invalid value (for example `docktail.cloud.check.kind=udp`) or an unknown `docktail.cloud.*` label is logged as a warning and ignored. `check.path` and `check.expect-status` are ignored when `check.kind=tcp`.
+
+Adding `docktail.cloud.ignore=true` to a container Cloud already monitors reads as that service being removed from the catalog; removing the label brings it back.

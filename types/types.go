@@ -36,6 +36,10 @@ type ContainerService struct {
 	FunnelFunnelPort string // Public-facing port (443, 8443, or 10000 for HTTPS)
 	FunnelProtocol   string // Funnel protocol (https, tcp, tls-terminated-tcp)
 	FunnelPath       string // HTTP(S) Funnel path (for example "/" or "/webhook")
+	// CloudLabels holds the container's docktail.cloud.* labels verbatim (nil
+	// when it has none). Only the optional DockTail Cloud module reads them; the
+	// Tailscale reconciler ignores them.
+	CloudLabels map[string]string
 }
 
 // TailscaleServiceConfig represents the JSON structure for Tailscale service configuration
@@ -68,4 +72,15 @@ const (
 	LabelFunnelPath       = "docktail.funnel.path"
 	LabelDirect           = "docktail.service.direct"  // Direct container IP proxying (default: true, set to "false" to use published ports)
 	LabelNetwork          = "docktail.service.network" // Docker network to use for container IP (default: bridge or first available)
+)
+
+// DockTail Cloud labels. They only matter with DOCKTAIL_CLOUD_KEY set, and
+// never change what the reconciler serves on the tailnet.
+const (
+	LabelCloudPrefix            = "docktail.cloud."
+	LabelCloudIgnore            = "docktail.cloud.ignore"              // "true": Cloud never monitors this container
+	LabelCloudLogs              = "docktail.cloud.logs"                // "off": never capture incident log excerpts
+	LabelCloudCheckKind         = "docktail.cloud.check.kind"          // local check kind: tcp or http
+	LabelCloudCheckPath         = "docktail.cloud.check.path"          // HTTP check path (implies kind http)
+	LabelCloudCheckExpectStatus = "docktail.cloud.check.expect-status" // HTTP status that counts as up (implies kind http)
 )

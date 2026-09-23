@@ -157,11 +157,46 @@ type Service struct {
 	CPUPercent    *float64 `json:"cpu_percent,omitempty"`     // container CPU usage as % of all host cores
 	MemUsageBytes int64    `json:"mem_usage_bytes,omitempty"` // working set (usage minus inactive file cache)
 	MemLimitBytes int64    `json:"mem_limit_bytes,omitempty"` // effective limit (container limit, else host total)
+
+	// LabelIntent is what the container's own docktail.cloud.* labels ask for
+	// this service. The agent has ALREADY applied it on top of [Config] (label
+	// wins for its own setting); the cloud receives it to know which settings
+	// are label-controlled. Nil ⇒ no valid cloud label. See [LabelIntent].
+	LabelIntent *LabelIntent `json:"label_intent,omitempty"`
+}
+
+// LabelIntent is the DockTail Cloud intent a container declares in its own
+// labels, where the rest of its configuration lives. Every field is optional
+// and names one label; an empty field means the label is absent (or its value
+// was invalid and dropped by the agent).
+//
+// The agent is the one that applies it: for the service it overrides the
+// matching field of the cloud-pushed [Config] — label wins for its own setting,
+// and a setting with no label keeps the cloud's value. The cloud never echoes
+// label intent back in a Config; it only records it (validated with
+// [SanitizeLabelIntent]) to show which settings are set by label, and to keep
+// its own server-side gates no looser than the label.
+//
+//   - Logs (docktail.cloud.logs) is only ever [LogModeOff]: a label can switch
+//     incident log capture off for the service, never on. Enabling capture stays
+//     a workspace decision.
+//   - CheckKind / CheckPath / CheckExpectStatus (docktail.cloud.check.kind,
+//     .path, .expect-status) shape the local check exactly like the matching
+//     [CheckConfig] fields, under the same bounds. A path or expected status
+//     without a kind implies "http"; with kind "tcp" the agent drops them.
+//
+// docktail.cloud.ignore=true is not carried here: an ignored container is not a
+// service at all, and is reported in [Containers] with LabelIgnored set.
+type LabelIntent struct {
+	Logs              string `json:"logs,omitempty"`                // LogModeOff only
+	CheckKind         string `json:"check_kind,omitempty"`          // tcp/http
+	CheckPath         string `json:"check_path,omitempty"`          // bounded relative HTTP path (see ValidateHTTPPath)
+	CheckExpectStatus int    `json:"check_expect_status,omitempty"` // 100–599
 }
 
 // Containers is the inventory of NON-docktail containers the agent sees on the
-// host — every running/stopped container that is not published as a docktail
-// service. Unlike [Snapshot] (the monitored service catalog), these carry only
+// host — every running/stopped container that is not reported as a docktail
+// [Service], including one labelled docktail.cloud.ignore=true. Unlike [Snapshot] (the monitored service catalog), these carry only
 // descriptive, read-only metadata: there are no checks, vantages, or incidents
 // for them, so the cloud never alerts on them. Like Snapshot, a Full message is
 // authoritative for presence — the cloud upserts the listed containers and
@@ -177,8 +212,12 @@ type Containers struct {
 // read-only metadata only — no exec/deploy surface. Identity is the docker
 // ContainerID (stable within a host).
 type Container struct {
-	ContainerID    string   `json:"container_id"`       // docker container id (short) — identity within host
-	IsAgent        bool     `json:"is_agent,omitempty"` // true for the container running this reporting agent
+	ContainerID string `json:"container_id"`       // docker container id (short) — identity within host
+	IsAgent     bool   `json:"is_agent,omitempty"` // true for the container running this reporting agent
+	// LabelIgnored marks a container labelled docktail.cloud.ignore=true. It is
+	// never reported as a [Service] (even if it publishes one), and the cloud
+	// never monitors it: it cannot be watched.
+	LabelIgnored   bool     `json:"label_ignored,omitempty"`
 	Name           string   `json:"name"`
 	Image          string   `json:"image"`
 	ImageTag       string   `json:"image_tag,omitempty"`

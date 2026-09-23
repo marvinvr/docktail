@@ -99,6 +99,44 @@ func isFunnelEnabled(labels map[string]string) bool {
 	return labels[apptypes.LabelFunnelEnable] == "true"
 }
 
+// IsCloudIgnored reports whether a container opts out of DockTail Cloud with
+// docktail.cloud.ignore=true. Such a container is never reported to the cloud
+// as a service; it only affects cloud reporting, never the reconciler.
+func IsCloudIgnored(labels map[string]string) bool {
+	return strings.EqualFold(strings.TrimSpace(labels[apptypes.LabelCloudIgnore]), "true")
+}
+
+// cloudLabels returns the docktail.cloud.* subset of a container's labels, or
+// nil when there is none.
+func cloudLabels(labels map[string]string) map[string]string {
+	var out map[string]string
+	for k, v := range labels {
+		if !strings.HasPrefix(k, apptypes.LabelCloudPrefix) {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]string)
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// withCloudLabels attaches the container's docktail.cloud.* labels to every
+// service parsed from it.
+func withCloudLabels(services []*apptypes.ContainerService, labels map[string]string) []*apptypes.ContainerService {
+	cl := cloudLabels(labels)
+	if cl == nil {
+		return services
+	}
+	for _, svc := range services {
+		if svc != nil {
+			svc.CloudLabels = cl
+		}
+	}
+	return services
+}
+
 func isManagedContainer(labels map[string]string) bool {
 	return isServiceEnabled(labels) || isFunnelEnabled(labels)
 }
@@ -746,6 +784,14 @@ func parseTags(tagsStr string, containerName string, defaultTags []string) []str
 }
 
 func (c *Client) parseContainer(ctx context.Context, containerID string, labels map[string]string) ([]*apptypes.ContainerService, error) {
+	services, err := c.parseContainerServices(ctx, containerID, labels)
+	if err != nil {
+		return nil, err
+	}
+	return withCloudLabels(services, labels), nil
+}
+
+func (c *Client) parseContainerServices(ctx context.Context, containerID string, labels map[string]string) ([]*apptypes.ContainerService, error) {
 	serviceEnabled := isServiceEnabled(labels)
 	funnelEnabled := isFunnelEnabled(labels)
 	if !serviceEnabled && !funnelEnabled {

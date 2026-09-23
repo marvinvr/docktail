@@ -46,8 +46,9 @@ type serviceCheck struct {
 }
 
 // run probes every service once. Cloud check config (keyed by service key)
-// selects the check shape but never its destination; services with no locally
-// discovered target are skipped.
+// selects the check shape but never its destination, and the service's own
+// docktail.cloud.check.* labels override it field by field; services with no
+// locally discovered target are skipped.
 func (c *checker) run(ctx context.Context, services []proto.Service, configs []proto.CheckConfig) []proto.CheckResult {
 	configs, _ = proto.SanitizeCheckConfigs(configs)
 	cfgByKey := make(map[string]proto.CheckConfig, len(configs))
@@ -61,6 +62,10 @@ func (c *checker) run(ctx context.Context, services []proto.Service, configs []p
 		if cc, ok := cfgByKey[svc.Key]; ok {
 			cfg := cc
 			sc.cfg = &cfg
+		}
+		// docktail.cloud.check.* labels win over the cloud's config, field by field.
+		if merged, ok := applyLabelIntent(svc.Key, sc.cfg, svc.LabelIntent); ok {
+			sc.cfg = &merged
 		}
 		if res, ok := c.runOne(ctx, sc); ok {
 			results = append(results, res)

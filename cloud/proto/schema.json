@@ -69,12 +69,23 @@
         "restart_count": { "type": "integer" },
         "cpu_percent": { "type": "number", "description": "live container CPU usage as % of all host cores" },
         "mem_usage_bytes": { "type": "integer", "description": "live working-set memory (usage minus inactive file cache)" },
-        "mem_limit_bytes": { "type": "integer", "description": "effective memory limit (container limit, else host total)" }
+        "mem_limit_bytes": { "type": "integer", "description": "effective memory limit (container limit, else host total)" },
+        "label_intent": { "$ref": "#/$defs/LabelIntent" }
+      }
+    },
+    "LabelIntent": {
+      "type": "object",
+      "description": "The container's own docktail.cloud.* labels, already applied by the agent over the cloud config (label wins for its own setting). Reported so the cloud can show what is label-controlled.",
+      "properties": {
+        "logs": { "type": "string", "enum": ["off"], "description": "docktail.cloud.logs — a label can only switch incident log capture off" },
+        "check_kind": { "type": "string", "enum": ["tcp", "http"], "description": "docktail.cloud.check.kind" },
+        "check_path": { "type": "string", "description": "docktail.cloud.check.path — bounded relative HTTP path" },
+        "check_expect_status": { "type": "integer", "minimum": 100, "maximum": 599, "description": "docktail.cloud.check.expect-status" }
       }
     },
     "Containers": {
       "type": "object",
-      "description": "Inventory of non-docktail containers (metadata only; no checks/incidents).",
+      "description": "Inventory of containers not reported as services, including docktail.cloud.ignore=true ones (metadata only; no checks).",
       "required": ["containers"],
       "properties": {
         "containers": { "type": "array", "items": { "$ref": "#/$defs/Container" } },
@@ -87,6 +98,7 @@
       "properties": {
         "container_id": { "type": "string", "description": "docker container id (short); identity within host" },
         "is_agent": { "type": "boolean", "description": "true when this container is the reporting DockTail agent" },
+        "label_ignored": { "type": "boolean", "description": "labelled docktail.cloud.ignore=true: never a service, never monitored" },
         "name": { "type": "string" },
         "image": { "type": "string" },
         "image_tag": { "type": "string" },
