@@ -187,3 +187,26 @@ match to associate each service advertisement with its host. The tailnet name
 groups the hosts that share a control plane, so Cloud knows which single host to
 ask for tailnet health. Neither is required — without them the agent simply
 reports fewer signals.
+
+### Connection Problems
+
+When Cloud refuses a connection, the agent logs the reason code and what to do
+about it (`cloud: connection rejected. …` when it will retry,
+`cloud: stopped reporting until this container restarts. …` when it will not).
+The explanation repeats every 30 minutes, so it stays near the end of
+`docker logs`. DockTail itself keeps serving your services either way; only
+reporting stops.
+
+| Reason | Meaning | What the agent does | Fix |
+| --- | --- | --- | --- |
+| `http_401`, `invalid_key` | The workspace key was revoked, its workspace was deleted, or it is mistyped. | Stops. | Create a new agent key at [cloud.docktail.org/settings/agent-keys](https://cloud.docktail.org/settings/agent-keys), set it as `DOCKTAIL_CLOUD_KEY`, and recreate the container (`docker compose up -d`). |
+| `blocked` | This host was blocked in the dashboard. | Checks again about every 15 minutes for up to 24 hours, then stops. | Unblock it at [cloud.docktail.org/hosts](https://cloud.docktail.org/hosts). After 24 hours, also restart the container. |
+| `protocol_mismatch` | This DockTail image speaks a wire protocol Cloud no longer accepts. | Checks again about every 15 minutes for up to 24 hours, then stops. | Pull the latest DockTail image and recreate the container. |
+| `http_403` | Something between the host and Cloud (a proxy, firewall, or WAF) refused the connection. | Checks again about every 15 minutes for up to 24 hours, then stops. | Allow outbound WebSocket connections to Cloud. After 24 hours, also restart the container. |
+| `enrollment_closed` | The key's enrollment window closed before this host joined. | Retries every 30–60 seconds. | Reopen enrollment for the key at [cloud.docktail.org/settings/agent-keys](https://cloud.docktail.org/settings/agent-keys), or recreate the container with a new key. |
+| `over_cap` | The workspace has reached its host limit. | Retries every 30–60 seconds. | Upgrade the plan at [cloud.docktail.org/settings/billing](https://cloud.docktail.org/settings/billing) or remove an offline host. |
+
+A key cannot be changed while the container runs, so rotating keys always means
+setting the new `DOCKTAIL_CLOUD_KEY` and recreating the container. Network errors
+and temporary Cloud outages are not rejections: the agent reconnects on its own
+with backoff.

@@ -49,7 +49,7 @@ type wsConn struct {
 }
 
 // dialError carries the HTTP status of a failed upgrade so callers can decide
-// between back off (5xx) and stop (401/403).
+// between back off (5xx) and stop (401/403, see httpRejection).
 type dialError struct {
 	statusCode int
 	err        error
@@ -291,3 +291,10 @@ func (b *backoff) next() time.Duration {
 func (b *backoff) slow() { b.cur = maxBackoff }
 
 func (b *backoff) reset() { b.cur = 0 }
+
+// around returns d with ±20% jitter, for fixed slow cadences that should still
+// not synchronize across a fleet.
+func (b *backoff) around(d time.Duration) time.Duration {
+	spread := d / 5
+	return d - spread + time.Duration(b.rng.Int63n(int64(2*spread)+1))
+}
