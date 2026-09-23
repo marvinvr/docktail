@@ -20,6 +20,8 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Tailscale daemon socket. |
 | `EXIT_ON_SOCKET_LOSS` | `true` | When `true`, DockTail exits if the Tailscale socket stays unreachable past the grace period, so the container's restart policy can re-establish the mount. See [Tailscale Socket Loss](#tailscale-socket-loss). |
 | `SOCKET_LOSS_GRACE_PERIOD` | `90s` | How long the Tailscale socket may stay unreachable before DockTail exits. Must be longer than a normal `tailscaled` restart. |
+| `UPDATE_CHECK` | `true` | When `true`, DockTail checks once a day whether a newer release exists and logs it once. Set `false` to never contact GitHub. See [Version And Updates](#version-and-updates). |
+| `HEALTH_FILE` | `/tmp/docktail-health.json` | Where DockTail writes the status file that `docktail health` (the image's health check) reads. Point it at a writable path if the container's `/tmp` is read-only. See [Health Check](#health-check). |
 
 If both OAuth and API key credentials are configured, DockTail uses OAuth.
 
@@ -170,6 +172,74 @@ the container's restart policy re-create the container and with it the mount.
 Prefer a named volume over a host path when you run `tailscaled` as a sidecar: a
 volume keeps one directory for its lifetime, so recreating the sidecar cannot
 detach DockTail's mount in the first place.
+
+### Version And Updates
+
+DockTail logs its version on startup (`Starting DockTail version=…`), and the
+binary prints it on request:
+
+```bash
+docker exec docktail /app/docktail --version
+# or, without a running container:
+docker run --rm --entrypoint /app/docktail ghcr.io/marvinvr/docktail:latest --version
+```
+
+Include that version in bug reports.
+
+About 30 seconds after startup and then once a day (hourly after a failed
+check), a release build asks the
+GitHub API for the repository's tags and, when a newer stable release exists,
+logs it once:
+
+```text
+INF A newer DockTail release is available; pull the new image and recreate the container to update (set UPDATE_CHECK=false to stop checking) current=1.8.2 latest=1.8.3 release_notes=https://github.com/marvinvr/docktail/releases
+```
+
+The request is an anonymous `GET` to `api.github.com` that carries nothing
+about your installation beyond the `docktail/<version>` user agent (GitHub
+sees the source IP, as with any request). It is
+skipped for development builds, a failure is only logged at debug level, and
+`UPDATE_CHECK=false` turns it off. Pre-release tags are never offered, and a
+pre-release build newer than the latest stable release is not nagged.
+
+### Health Check
+
+The image's `HEALTHCHECK` runs `docktail health`, which tracks DockTail itself
+rather than only the Tailscale daemon. The running process rewrites a small
+JSON status file every 10 seconds (and after every reconcile) at `HEALTH_FILE`;
+`docktail health` reads it, prints a one-line verdict, and exits `0` when
+healthy and `1` when not. Nothing listens on a port.
+
+DockTail is **unhealthy** when:
+
+- the status file is missing or has not been updated for a minute (DockTail is
+  hung, stopped, or cannot write the file);
+- the `tailscaled` socket does not accept connections;
+- the last two reconciles could not read the containers from Docker;
+- no reconcile has finished for three reconcile intervals (at least three
+  minutes), meaning the loop is stuck.
+
+A reconcile that fails for individual services — a label conflict, a service
+the tailnet refuses — is reported as `healthy, with errors`: that is one
+container's configuration, and DockTail keeps serving the rest.
+
+The [DockTail Cloud](06-cloud.md#docktail-cloud) link state (`connecting`,
+`connected`, `disconnected`, `rejected`, or `failed`) is included in the output
+but never makes the container unhealthy: a cloud outage or a revoked key does
+not stop DockTail from serving containers, and a restart triggered by the
+health status (Swarm, autoheal) would drain every service without fixing it.
+
+```bash
+docker exec docktail /app/docktail health
+# healthy: last reconcile 12s ago; cloud connected for 3h12m4s
+
+docker inspect --format '{{json .State.Health}}' docktail   # Docker's view, with recent outputs
+docker exec docktail cat /tmp/docktail-health.json          # the full status
+```
+
+With a read-only root filesystem, mount a `tmpfs` at `/tmp` or set
+`HEALTH_FILE` to a writable path; otherwise DockTail logs a warning and the
+health check reports unhealthy.
 
 ### Useful Links
 
