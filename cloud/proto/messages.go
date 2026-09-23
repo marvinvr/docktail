@@ -527,9 +527,9 @@ const (
 	// the customer's own Tailscale API quota from a buggy or hostile cloud.
 	MinTailnetProbeIntervalMS int64 = 60_000
 	// DefaultTailnetProbeIntervalMS is the cloud's polling cadence per
-	// (workspace, tailnet). Service state changes on human timescales (an admin
-	// approving a service), so this is deliberately slow.
-	DefaultTailnetProbeIntervalMS int64 = 300_000
+	// (workspace, tailnet). Only locally-up, container-backed service names are
+	// included in each sweep, keeping the API load bounded at this cadence.
+	DefaultTailnetProbeIntervalMS int64 = 120_000
 )
 
 // ---------------------------------------------------------------------------
@@ -551,6 +551,7 @@ const (
 	ClassRefused    = "refused"
 	ClassTLS        = "tls"
 	ClassHTTP5xx    = "http_5xx"
+	ClassHTTPStatus = "http_status" // HTTP answered, but not with the configured expect_status (and not a 5xx)
 	ClassACLBlocked = "acl_blocked" // reserved for the deferred Control-API ACL audit; not produced by the tailnet vantage
 	ClassContainer  = "container"   // local down -> container problem
 
@@ -562,11 +563,12 @@ const (
 	ClassServiceMissing = "service_missing" // no such service definition in the tailnet at all
 
 	// Public-vantage classes. The cloud produces these from its own HTTPS probe of
-	// a Funnel exposure (see docs/public-vantage.md). They are namespaced rather
-	// than reusing the transport classes above because the classification is also
-	// the incident's, and a bare `timeout` could not say WHICH layer timed out:
-	// the recovery rules ask "is this outage currently explained by the public
-	// vantage?" and must never mistake a local probe failure for a Funnel one.
+	// a Funnel exposure (see DockTail Cloud docs/vantages.md). They are
+	// namespaced rather than reusing the transport classes above because the
+	// classification is also the incident's, and a bare `timeout` could not say
+	// WHICH layer timed out: the recovery rules ask "is this outage currently
+	// explained by the public vantage?" and must never mistake a local probe
+	// failure for a Funnel one.
 	ClassPublicDNS     = "public_dns"      // the funnel hostname does not resolve to a public address
 	ClassPublicTimeout = "public_timeout"  // no answer from the funnel within the probe budget
 	ClassPublicRefused = "public_refused"  // the funnel ingress refused the connection
@@ -575,7 +577,7 @@ const (
 
 	// Deprecated: ClassServe was emitted by the removed `tailscale serve` vantage.
 	// Recognized so pre-existing incidents and stored rows still render; never
-	// produced. See docs/prober.md.
+	// produced. See DockTail Cloud docs/vantages.md.
 	ClassServe = "serve"
 )
 
@@ -702,7 +704,7 @@ const MaxFilesystems = 16
 // Log capture modes — the workspace default ([LogConfig.Mode]) and per-service
 // overrides ([LogConfig.Overrides]) both use these.
 const (
-	LogModeIncident   = "incident"   // capture the tail on a down-signal event (what the cloud sends unless the workspace turned capture off)
-	LogModeOff        = "off"        // never capture; also the fail-closed value for an empty or invalid mode
+	LogModeIncident   = "incident"   // capture the tail on a down-signal event (what the cloud sends for a workspace that never set this)
+	LogModeOff        = "off"        // never capture; also the fail-closed value for an empty, invalid, or reserved mode (see [SafeLogMode])
 	LogModeContinuous = "continuous" // reserved: rolling capture, not yet implemented
 )

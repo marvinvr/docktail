@@ -42,3 +42,4 @@ When adding a new feature, include the relevant docs page update and at least on
 - Do not run tests, start the software, start the dev server, start Docker Compose, or execute migrations unless explicitly asked by the developer.
 - Do not read entire translation files. Make targeted reads and edits only.
 - Do not add yourself as a co-author in commits.
+- `cloud/proto` is a verbatim copy of the DockTail Cloud wire contract, not code owned here. Never edit it on its own: every change is made identically in the control plane's copy (the source of truth) so the two stay byte-identical, and every wire addition is `omitempty` and backward-compatible. Keep it stdlib-only, and never add exec, deploy, shell, or command message types.
