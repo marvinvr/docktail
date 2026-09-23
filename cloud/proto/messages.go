@@ -551,6 +551,7 @@ const (
 	ClassRefused    = "refused"
 	ClassTLS        = "tls"
 	ClassHTTP5xx    = "http_5xx"
+	ClassHTTPStatus = "http_status" // HTTP answered, but not with the configured expect_status (and not a 5xx)
 	ClassACLBlocked = "acl_blocked" // reserved for the deferred Control-API ACL audit; not produced by the tailnet vantage
 	ClassContainer  = "container"   // local down -> container problem
 

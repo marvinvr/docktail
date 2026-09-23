@@ -19,7 +19,11 @@ const (
 	// takes a few seconds to accept a connection is reported slow (degraded),
 	// not timed out and misclassified as a critical container-down.
 	dialTimeout = 15 * time.Second
-	httpTimeout = 5 * time.Second
+	// httpTimeout bounds the whole local HTTP exchange (connect through response
+	// headers). It must also stay well above the 5s degraded threshold: a
+	// timeout at or below it would turn every slow-but-answering endpoint into a
+	// failed probe, making "degraded" unreachable for HTTP checks.
+	httpTimeout = dialTimeout
 )
 
 // checker runs local-vantage probes. The checker only produces the "local"
@@ -149,12 +153,15 @@ func (c *checker) tcpCheck(ctx context.Context, key, target string) proto.CheckR
 func (c *checker) httpCheck(ctx context.Context, key, target, path string, expect int) proto.CheckResult {
 	res := proto.CheckResult{ServiceKey: key, Vantage: proto.VantageLocal, Kind: "http", CheckedAt: nowMillis()}
 	start := time.Now()
+	// A bad path is a configuration problem, not a transport fault, so it is
+	// left unclassified rather than reported as a refused connection. It is not
+	// expected in practice: SanitizeCheckConfigs already drops configs whose
+	// path fails the same parse, so such a service falls back to a TCP check.
 	relative, err := url.ParseRequestURI(path)
 	if err != nil {
 		res.LatencyMS = time.Since(start).Milliseconds()
 		res.OK = false
 		res.Error = "invalid relative HTTP check path"
-		res.Class = proto.ClassRefused
 		return res
 	}
 	checkURL := (&url.URL{
@@ -166,10 +173,10 @@ func (c *checker) httpCheck(ctx context.Context, key, target, path string, expec
 	}).String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, checkURL, nil)
 	if err != nil {
+		// Building the request never touched the network: unclassified, as above.
 		res.LatencyMS = time.Since(start).Milliseconds()
 		res.OK = false
 		res.Error = err.Error()
-		res.Class = proto.ClassRefused
 		return res
 	}
 	resp, err := c.httpClient.Do(req)
@@ -183,18 +190,27 @@ func (c *checker) httpCheck(ctx context.Context, key, target, path string, expec
 	defer func() { _ = resp.Body.Close() }()
 
 	res.StatusCode = resp.StatusCode
-	switch {
-	case resp.StatusCode >= 500:
-		res.OK = false
-		res.Class = proto.ClassHTTP5xx
-	case expect > 0 && resp.StatusCode != expect:
-		res.OK = false
-		res.Class = proto.ClassHTTP5xx
-	default:
-		// 2xx/3xx/4xx: the endpoint answered → reachable.
-		res.OK = true
-	}
+	res.OK, res.Class = classifyHTTPStatus(resp.StatusCode, expect)
 	return res
+}
+
+// classifyHTTPStatus judges a response the endpoint actually returned. A
+// configured expected status is authoritative: only that exact code passes, so
+// an endpoint deliberately expected to answer 503 is healthy when it does. A
+// miss is http_5xx when the server errored and http_status otherwise (e.g. a
+// 404 or an unfollowed redirect where 200 was expected). Without an expected
+// status, any answer below 500 proves the endpoint is reachable.
+func classifyHTTPStatus(code, expect int) (ok bool, class string) {
+	switch {
+	case expect > 0 && code == expect:
+		return true, ""
+	case code >= 500:
+		return false, proto.ClassHTTP5xx
+	case expect > 0:
+		return false, proto.ClassHTTPStatus
+	default:
+		return true, ""
+	}
 }
 
 func classifyDialError(err error) string {
