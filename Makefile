@@ -59,14 +59,14 @@ build-all:
 	GOOS=darwin GOARCH=amd64 go build -o $(BINARY_NAME)-darwin-amd64 .
 	GOOS=darwin GOARCH=arm64 go build -o $(BINARY_NAME)-darwin-arm64 .
 
-# Start docker-compose
+# Start the development stack (builds from source; see docker-compose.dev.yaml)
 up:
-	docker compose up -d
+	docker compose -f docker-compose.dev.yaml up -d
 
-# Stop docker-compose
+# Stop the development stack
 down:
-	docker compose down
+	docker compose -f docker-compose.dev.yaml down
 
-# View logs
+# View the development stack's DockTail logs
 logs:
-	docker logs -f docktail
+	docker logs -f dev-docktail

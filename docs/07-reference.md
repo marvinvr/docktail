@@ -14,10 +14,10 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `IGNORE_SERVICE_NAMES` | - | Comma-separated service names DockTail must not drain, clear, or delete during reconciliation or shutdown cleanup. |
 | `DELETE_UNUSED_SERVICES` | `false` | When `true`, DockTail deletes tailnet Service definitions that no host advertises anymore. Requires API credentials. See [Cleanup Behavior](#cleanup-behavior). |
 | `SKIP_SHUTDOWN_CLEANUP` | `false` | When `true`, DockTail leaves its services and Funnels advertised on shutdown instead of draining and clearing them. This can keep ports exposed on the tailnet beyond what your current labels define; see [Cleanup Behavior](#cleanup-behavior). |
-| `LOG_LEVEL` | `info` | Logging level: `debug`, `info`, `warn`, or `error`. |
+| `LOG_LEVEL` | `info` | Logging level for all output, including the DockTail Cloud module: `debug`, `info`, `warn`, or `error`. Any other value means `info`. |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. Rootless Docker typically uses `unix:///run/user/<uid>/docker.sock`. |
-| `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | Tailscale daemon socket. |
+| `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | The `tailscaled` socket the [socket-loss check](#tailscale-socket-loss) probes. DockTail does not pass it to the bundled `tailscale` CLI, which does the serve and Funnel work at its own default of `/var/run/tailscale/tailscaled.sock`, so mount the daemon's socket directory at `/var/run/tailscale` either way. |
 | `EXIT_ON_SOCKET_LOSS` | `true` | When `true`, DockTail exits if the Tailscale socket stays unreachable past the grace period, so the container's restart policy can re-establish the mount. See [Tailscale Socket Loss](#tailscale-socket-loss). |
 | `SOCKET_LOSS_GRACE_PERIOD` | `90s` | How long the Tailscale socket may stay unreachable before DockTail exits. Must be longer than a normal `tailscaled` restart. |
 
@@ -35,6 +35,22 @@ Supported file-backed credential variables:
 
 `IGNORE_SERVICE_NAMES` accepts bare names like `grafana` and fully qualified names like `svc:grafana`.
 
+Durations (`RECONCILE_INTERVAL`, `SOCKET_LOSS_GRACE_PERIOD`) use Go syntax such as `30s`, `5m` or `1h30m`; booleans accept `true`/`false`, `1`/`0`, and `t`/`f`. An unparseable value in one of the variables above logs a warning and falls back to the default.
+
+#### Docker Connection And Log Output
+
+DockTail builds its Docker client from the standard Docker environment variables, so they work as they do for the `docker` CLI. Besides `DOCKER_HOST` above, which also takes `tcp://host:port` (for example a [read-only socket proxy](02-security.md#read-only-socket-proxy)):
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DOCKER_API_VERSION` | negotiated | Pins the Docker API version instead of negotiating it with the daemon. |
+| `DOCKER_CERT_PATH` | - | Directory with `ca.pem`, `cert.pem` and `key.pem`. Setting it makes DockTail talk TLS to a `tcp://` daemon. |
+| `DOCKER_TLS_VERIFY` | - | Used with `DOCKER_CERT_PATH`: any non-empty value verifies the daemon's certificate; unset or empty skips verification. |
+
+Log lines are colored only when stdout is a terminal; setting `NO_COLOR` (to any value) or `TERM=dumb` turns color off there too.
+
+`TAILSCALE_AUTH_KEY` in the examples is read by the `tailscale/tailscale` sidecar container (as `TS_AUTHKEY`), not by DockTail.
+
 #### DockTail Cloud (optional)
 
 These variables enable optional DockTail Cloud reporting. They are opt-in: the agent is completely inert unless `DOCKTAIL_CLOUD_KEY` is set. See [DockTail Cloud](#docktail-cloud).
@@ -42,8 +58,8 @@ These variables enable optional DockTail Cloud reporting. They are opt-in: the a
 | Variable | Default | Description |
 | --- | --- | --- |
 | `DOCKTAIL_CLOUD_KEY` | - | Workspace key (`dtc_...`) from the cloud dashboard. Enables reporting. Inert when unset. |
-| `DOCKTAIL_LOG_LEVEL` | `info` | Log level for the cloud module: `debug`, `info`, `warn`, or `error`. |
-| `DOCKTAIL_CHECK_INTERVAL` | `30s` | How often local-vantage checks run (5s–5m). |
+| `DOCKTAIL_LOG_LEVEL` | `info` | Read, but currently has no effect: the cloud module logs at the level `LOG_LEVEL` sets. |
+| `DOCKTAIL_CHECK_INTERVAL` | `30s` | How often local-vantage checks run (5s–5m). A value outside that range, or one that does not parse, keeps the cloud module from starting; DockTail itself keeps running. |
 | `DOCKTAIL_HOST_ROOT` | `/host` | Where the host's root filesystem is bind-mounted, for whole-host disk usage. Only used when that path exists; see [Disk Usage](06-cloud.md#disk-usage). |
 
 Local-development overrides: `DOCKTAIL_CLOUD_URL` replaces the built-in ingest

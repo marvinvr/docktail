@@ -1,0 +1,52 @@
+# DockTail with DockTail Cloud reporting, on a Linux host that already runs
+# Tailscale. DockTail Cloud is a paid, hosted service:
+# https://docktail.org/cloud/ -- agent setup: https://docktail.org/docs/#docktail-cloud
+#
+# Before you start:
+#   1. DockTail works on this host without Cloud (host tagged, tailnet policy
+#      set up): https://docktail.org/docs/#tailscale-admin-setup
+#   2. Tailscale OAuth credentials (or an API key) are configured. Cloud's
+#      tailnet health check needs them; without them it reports "no Tailscale
+#      credentials" for this host instead.
+#   3. A workspace key (dtc_...) from https://cloud.docktail.org whose
+#      enrollment window is open.
+#
+# Usage:
+#   Put TAILSCALE_OAUTH_CLIENT_ID, TAILSCALE_OAUTH_CLIENT_SECRET and
+#   DOCKTAIL_CLOUD_KEY in .env (see .env.example), then:
+#   docker compose -f docker-compose.cloud.yaml up -d
+#
+# No Tailscale on the host (macOS, Windows, most NAS devices)? Take the
+# tailscale service and the tailscale-socket volume from
+# docker-compose.sidecar.yaml and mount that volume here instead of
+# /var/run/tailscale.
+
+services:
+  docktail:
+    image: ghcr.io/marvinvr/docktail:latest
+    container_name: docktail
+    # Required: DockTail exits on purpose when it loses the Tailscale socket and
+    # relies on the restart policy to come back with a fresh mount.
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Mount the directory, not the socket file.
+      - /var/run/tailscale:/var/run/tailscale
+      # Optional. Reports disk usage for every host filesystem, not just the
+      # one backing /var/lib/docker. Read-only and used for nothing else.
+      # - /:/host:ro
+    environment:
+      - TAILSCALE_OAUTH_CLIENT_ID=${TAILSCALE_OAUTH_CLIENT_ID}
+      - TAILSCALE_OAUTH_CLIENT_SECRET=${TAILSCALE_OAUTH_CLIENT_SECRET}
+      # Enables DockTail Cloud reporting. Without it the module is inert.
+      - DOCKTAIL_CLOUD_KEY=${DOCKTAIL_CLOUD_KEY}
+
+  # Example app. No published ports: DockTail proxies to the container IP.
+  whoami:
+    image: traefik/whoami:latest
+    restart: unless-stopped
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=whoami"
+      - "docktail.service.port=80"
+      - "docktail.service.service-port=443"
