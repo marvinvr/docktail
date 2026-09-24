@@ -55,7 +55,9 @@ func (c *Client) GetCloudContainers(ctx context.Context) ([]*apptypes.ContainerS
 
 	var services []*apptypes.ContainerService
 	for _, cont := range containers {
-		if !isManagedContainer(cont.Labels) {
+		// docktail.cloud.ignore=true: still served on the tailnet, but never a
+		// cloud service — GetOtherContainers reports it as plain inventory.
+		if !isManagedContainer(cont.Labels) || IsCloudIgnored(cont.Labels) {
 			continue
 		}
 
@@ -77,7 +79,7 @@ func (c *Client) GetCloudContainers(ctx context.Context) ([]*apptypes.ContainerS
 			log.Warn().Err(perr).Str("container", name).Msg("cloud: failed to parse running container, skipping")
 			continue
 		}
-		services = append(services, c.stoppedCloudServices(cont.ID, name, cont.Labels)...)
+		services = append(services, withCloudLabels(c.stoppedCloudServices(cont.ID, name, cont.Labels), cont.Labels)...)
 	}
 	return services, nil
 }
@@ -89,6 +91,7 @@ func (c *Client) GetCloudContainers(ctx context.Context) ([]*apptypes.ContainerS
 type OtherContainer struct {
 	ID             string // short container id — identity within the host
 	IsAgent        bool   // this container is running the reporting DockTail agent
+	LabelIgnored   bool   // labelled docktail.cloud.ignore=true (never a service, never monitored)
 	Name           string
 	Image          string
 	ImageTag       string
@@ -101,11 +104,12 @@ type OtherContainer struct {
 	CreatedAt      int64 // unix seconds the container was created
 }
 
-// GetOtherContainers lists every container that is NOT a docktail-managed
-// service (neither docktail.enable nor docktail.funnel.enable set), INCLUDING
-// stopped ones, for the cloud's container-inventory view. It is read-only and
-// builds each entry straight from the container-list summary — no per-container
-// inspect — so it stays cheap even on a busy host. Used only by the cloud module
+// GetOtherContainers lists every container that is NOT reported as a docktail
+// service — unmanaged (neither docktail.service.enable nor docktail.funnel.enable
+// set) or labelled docktail.cloud.ignore=true — INCLUDING stopped ones, for the
+// cloud's container-inventory view. It is read-only and builds each entry
+// straight from the container-list summary — no per-container inspect — so it
+// stays cheap even on a busy host. Used only by the cloud module
 // (DOCKTAIL_CLOUD_KEY set); docktail-managed containers are reported separately
 // by GetCloudContainers as services.
 func (c *Client) GetOtherContainers(ctx context.Context) ([]OtherContainer, error) {
@@ -117,7 +121,8 @@ func (c *Client) GetOtherContainers(ctx context.Context) ([]OtherContainer, erro
 	selfID := ownContainerID()
 	out := make([]OtherContainer, 0, len(containers))
 	for _, cont := range containers {
-		if isManagedContainer(cont.Labels) {
+		ignored := IsCloudIgnored(cont.Labels)
+		if isManagedContainer(cont.Labels) && !ignored {
 			continue // a docktail service — reported via GetCloudContainers
 		}
 		name := ""
@@ -126,16 +131,17 @@ func (c *Client) GetOtherContainers(ctx context.Context) ([]OtherContainer, erro
 		}
 		image, tag := splitImageTag(cont.Image)
 		oc := OtherContainer{
-			ID:        shortContainerID(cont.ID),
-			IsAgent:   selfID != "" && cont.ID == selfID,
-			Name:      name,
-			Image:     image,
-			ImageTag:  tag,
-			State:     cont.State,
-			Status:    cont.Status,
-			Health:    healthFromStatus(cont.Status),
-			Ports:     formatContainerPorts(cont.Ports),
-			CreatedAt: cont.Created,
+			ID:           shortContainerID(cont.ID),
+			IsAgent:      selfID != "" && cont.ID == selfID,
+			LabelIgnored: ignored,
+			Name:         name,
+			Image:        image,
+			ImageTag:     tag,
+			State:        cont.State,
+			Status:       cont.Status,
+			Health:       healthFromStatus(cont.Status),
+			Ports:        formatContainerPorts(cont.Ports),
+			CreatedAt:    cont.Created,
 		}
 		if cont.Labels != nil {
 			oc.ComposeProject = cont.Labels["com.docker.compose.project"]

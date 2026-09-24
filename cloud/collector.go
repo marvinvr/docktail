@@ -55,6 +55,7 @@ type Collector struct {
 	logMode      string              // workspace default capture mode ("" ⇒ proto.LogModeOff)
 	logOverrides map[string]string   // per-service capture mode override (service key -> proto.LogMode*)
 	checkFails   map[string]int      // consecutive local-check failures per service key, for incident log capture
+	labelWarned  map[string]string   // container id -> the docktail.cloud.* label problems last warned about
 	cfgVer       int
 	unmonitored  bool      // cloud reports this host inactive/past the plan cap; throttle output
 	lastTeaser   time.Time // last throttled teaser snapshot sent while unmonitored
@@ -125,6 +126,7 @@ func NewCollector(ctx context.Context, cfg Config, dc *docker.Client, ts tailnet
 		specs:          specs,
 		logOverrides:   map[string]string{},
 		checkFails:     map[string]int{},
+		labelWarned:    map[string]string{},
 		prevCPU:        map[string]cpuSample{},
 		prevCPUOther:   map[string]cpuSample{},
 		hostMx:         hmr,
@@ -153,7 +155,7 @@ func (c *Collector) Fingerprint() string { return c.fingerprint }
 // OnReconcile receives the reconciler's freshly computed services, enriches them
 // with runtime detail, stores them, and (if connected) sends a snapshot.
 func (c *Collector) OnReconcile(ctx context.Context, services []*apptypes.ContainerService) {
-	built := c.buildServices(ctx, services)
+	built := c.buildServices(ctx, services, false)
 
 	c.mu.Lock()
 	c.latest = built
@@ -194,8 +196,14 @@ func (c *Collector) OnEvent(ctx context.Context, msg events.Message) {
 	if unmonitored {
 		return
 	}
+	// The event's attributes carry the container's labels, so a label opt-out
+	// holds even before the container's first snapshot.
+	noCapture := labelsForbidCapture(msg.Actor.Attributes)
 	for _, ev := range evs {
 		c.sendOrSpool(conn, proto.TypeEvent, ev)
+		if noCapture {
+			continue
+		}
 		// Capture the tail now, not at replay time: by the time the link is back the
 		// container may have been recreated and its logs gone with it.
 		c.maybeCaptureLogs(ctx, conn, ev)
@@ -206,7 +214,11 @@ func (c *Collector) OnEvent(ctx context.Context, msg events.Message) {
 
 // buildServices maps reconciler ContainerService values to wire Services,
 // enriching each with a single inspect + stats sample per distinct container.
-func (c *Collector) buildServices(ctx context.Context, services []*apptypes.ContainerService) []proto.Service {
+//
+// full marks a build from self-discovery, which lists every managed container
+// (stopped ones included); only such a build may forget label warnings for
+// containers it did not see.
+func (c *Collector) buildServices(ctx context.Context, services []*apptypes.ContainerService, full bool) []proto.Service {
 	type enriched struct {
 		info  docker.CloudInfo
 		stats containerStats
@@ -216,8 +228,19 @@ func (c *Collector) buildServices(ctx context.Context, services []*apptypes.Cont
 	// of them, and toService stays a pure mapping.
 	funnelHost := c.funnelHostname()
 	out := make([]proto.Service, 0, len(services))
+	labelled := make(map[string]struct{})
 	for _, cs := range services {
 		if cs == nil {
+			continue
+		}
+		labels := parseCloudLabels(cs.CloudLabels)
+		if _, seen := labelled[cs.ContainerID]; !seen {
+			labelled[cs.ContainerID] = struct{}{}
+			c.warnLabelProblems(cs.ContainerID, cs.ContainerName, labels.problems)
+		}
+		if labels.ignored {
+			// docktail.cloud.ignore=true: not a cloud service at all. The container
+			// is reported as plain inventory (GetOtherContainers) instead.
 			continue
 		}
 		e, ok := cache[cs.ContainerID]
@@ -228,14 +251,52 @@ func (c *Collector) buildServices(ctx context.Context, services []*apptypes.Cont
 			e.stats = c.sampleStats(ctx, cs.ContainerID, e.info.State)
 			cache[cs.ContainerID] = e
 		}
-		out = append(out, toService(cs, e.info, e.stats, funnelHost))
+		svc := toService(cs, e.info, e.stats, funnelHost)
+		svc.LabelIntent = intentForService(labels.intent, cs.Protocol)
+		out = append(out, svc)
 	}
 	present := make(map[string]struct{}, len(cache))
 	for id := range cache {
 		present[id] = struct{}{}
 	}
 	c.pruneStats(present)
+	if full {
+		c.pruneLabelWarnings(labelled)
+	}
 	return out
+}
+
+// warnLabelProblems logs a container's invalid or unknown docktail.cloud.*
+// labels once, and again only when the set of problems changes, so a bad label
+// does not repeat on every discovery tick.
+func (c *Collector) warnLabelProblems(containerID, containerName string, problems []string) {
+	signature := strings.Join(problems, "\n")
+	c.mu.Lock()
+	previous, known := c.labelWarned[containerID]
+	if signature == "" {
+		delete(c.labelWarned, containerID)
+	} else {
+		c.labelWarned[containerID] = signature
+	}
+	c.mu.Unlock()
+	if signature == "" || (known && previous == signature) {
+		return
+	}
+	for _, problem := range problems {
+		c.log.Warn().Str("container", containerName).Msg("cloud: " + problem)
+	}
+}
+
+// pruneLabelWarnings forgets label warnings for containers no longer in the
+// latest build, so a recreated container warns again and the map stays bounded.
+func (c *Collector) pruneLabelWarnings(present map[string]struct{}) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for id := range c.labelWarned {
+		if _, ok := present[id]; !ok {
+			delete(c.labelWarned, id)
+		}
+	}
 }
 
 // sampleStats reads a one-shot docker stats sample for a running container and
@@ -453,6 +514,16 @@ func (c *Collector) eventBases(msg events.Message, attrs map[string]string) []pr
 }
 
 func (c *Collector) serviceKeysForEvent(msg events.Message, attrs map[string]string) []string {
+	// An ignored container is plain inventory to the cloud, so its events name
+	// the container, never a service — not even one the same-named container
+	// published before the label was added (compose recreates under the name).
+	if docker.IsCloudIgnored(attrs) {
+		if name := strings.TrimSpace(attrs["name"]); name != "" {
+			return []string{name}
+		}
+		return nil
+	}
+
 	c.mu.RLock()
 	latest := c.latest
 	c.mu.RUnlock()
@@ -925,7 +996,7 @@ func (c *Collector) scanAndSnapshot(ctx context.Context, conn *wsConn) {
 		c.log.Warn().Err(err).Msg("cloud: container discovery failed")
 		return
 	}
-	built := c.buildServices(ctx, containers)
+	built := c.buildServices(ctx, containers, true)
 	c.mu.Lock()
 	c.latest = built
 	c.mu.Unlock()
@@ -972,6 +1043,7 @@ func (c *Collector) buildContainers(ctx context.Context, containers []docker.Oth
 		out = append(out, proto.Container{
 			ContainerID:    oc.ID,
 			IsAgent:        oc.IsAgent,
+			LabelIgnored:   oc.LabelIgnored,
 			Name:           oc.Name,
 			Image:          oc.Image,
 			ImageTag:       oc.ImageTag,
@@ -1204,11 +1276,19 @@ func (c *Collector) applyConfig(cfg proto.Config) {
 		Msg("cloud: applied config")
 }
 
-// logModeFor returns the effective capture mode for a service key: its override
-// when set, else the workspace default, else the built-in default (off).
+// logModeFor returns the effective capture mode for a service key: off when its
+// container is labelled docktail.cloud.logs=off, else its cloud override when
+// set, else the workspace default, else the built-in default (off).
 func (c *Collector) logModeFor(serviceKey string) string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
+	// docktail.cloud.logs=off on the service's container wins over any cloud
+	// setting for it.
+	for _, svc := range c.latest {
+		if svc.Key == serviceKey && svc.LabelIntent != nil && svc.LabelIntent.Logs == proto.LogModeOff {
+			return proto.LogModeOff
+		}
+	}
 	if m := c.logOverrides[serviceKey]; m != "" {
 		return m
 	}
