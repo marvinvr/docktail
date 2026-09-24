@@ -251,7 +251,7 @@ func (t *Tracker) write() error {
 // restart triggered by an unhealthy status (Swarm, autoheal) would drain every
 // service without fixing anything on the cloud side.
 func Check(path string, now time.Time) (bool, string) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: the operator-configured status file this binary writes itself
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, fmt.Sprintf("unhealthy: no status file at %s (DockTail is not running, is still starting, or cannot write it; see %s)", path, EnvFile)

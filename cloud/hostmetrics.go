@@ -336,7 +336,7 @@ func readThermalZones() []proto.TempReading {
 			continue
 		}
 		label := filepath.Base(d)
-		if t, err := os.ReadFile(filepath.Join(d, "type")); err == nil {
+		if t, err := os.ReadFile(filepath.Join(d, "type")); err == nil { //nolint:gosec // G304: sysfs path globbed under sysDir
 			if s := strings.TrimSpace(string(t)); s != "" {
 				label = s
 			}
@@ -362,7 +362,7 @@ func readHwmonTemps() []proto.TempReading {
 // readMilliCelsius reads a sysfs millidegree-Celsius file and returns degrees C
 // rounded to one decimal, dropping implausible values.
 func readMilliCelsius(path string) (float64, bool) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: sysfs path globbed under sysDir
 	if err != nil {
 		return 0, false
 	}
@@ -384,10 +384,10 @@ func hwmonLabel(inputPath string) string {
 	dir := filepath.Dir(inputPath)
 	prefix := strings.TrimSuffix(filepath.Base(inputPath), "_input") // tempX
 	var chip, label string
-	if n, err := os.ReadFile(filepath.Join(dir, "name")); err == nil {
+	if n, err := os.ReadFile(filepath.Join(dir, "name")); err == nil { //nolint:gosec // G304: sysfs path globbed under sysDir
 		chip = strings.TrimSpace(string(n))
 	}
-	if l, err := os.ReadFile(filepath.Join(dir, prefix+"_label")); err == nil {
+	if l, err := os.ReadFile(filepath.Join(dir, prefix+"_label")); err == nil { //nolint:gosec // G304: sysfs path globbed under sysDir
 		label = strings.TrimSpace(string(l))
 	}
 	switch {

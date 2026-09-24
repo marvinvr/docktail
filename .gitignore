@@ -116,3 +116,6 @@ go.work.sum
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+# GoReleaser output
+dist/

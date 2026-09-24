@@ -25,6 +25,11 @@ import (
 	"github.com/marvinvr/docktail/version"
 )
 
+// socketStartupWait bounds how long startup waits for a tailscaled that is not
+// listening yet. DockTail carries on afterwards: the reconcile loop retries and
+// the socket watchdog only arms once the socket has been reachable.
+const socketStartupWait = 15 * time.Second
+
 func main() {
 	if len(os.Args) > 1 {
 		os.Exit(runCommand(os.Args[1:]))
@@ -133,6 +138,26 @@ func main() {
 		IgnoreServiceNames:   ignoreServiceNames,
 		DeleteUnusedServices: deleteUnusedServices,
 	})
+
+	// tailscaled may still be starting (a sidecar behind a plain depends_on, a
+	// host that is booting). Give it a bounded moment before the version check
+	// and the first reconcile, both of which need the daemon. A signal during
+	// the wait exits cleanly: nothing has been advertised yet that would need
+	// cleaning up.
+	waitCtx, stopWait := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	waitErr := tailscaleClient.WaitForSocket(waitCtx, socketStartupWait, 250*time.Millisecond)
+	interrupted := waitCtx.Err() != nil
+	stopWait()
+	if interrupted {
+		log.Info().Msg("Received shutdown signal while waiting for the Tailscale socket, exiting")
+		return
+	}
+	if waitErr != nil {
+		log.Warn().Err(waitErr).
+			Str("socket", tailscaleSocket).
+			Dur("waited", socketStartupWait).
+			Msg("Tailscale socket is still unreachable; starting anyway and retrying on every reconcile")
+	}
 
 	// Detect CLI/daemon version mismatch (common with host-mode Tailscale)
 	tailscaleClient.DetectVersionMismatch(context.Background())
@@ -309,7 +334,7 @@ func getEnvFileValue(fileKey string) (string, bool) {
 		return "", false
 	}
 
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(path) //nolint:gosec // G304: the operator names this file via FILE__<VAR> / <VAR>_FILE on purpose
 	if err != nil {
 		log.Fatal().
 			Err(err).

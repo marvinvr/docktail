@@ -165,7 +165,10 @@ the container's restart policy re-create the container and with it the mount.
   restart, which takes a second or two. Brief outages are ignored and never
   cause an exit.
 - The check arms only after the socket has been reachable at least once, so
-  starting DockTail before `tailscaled` waits rather than exits.
+  starting DockTail before `tailscaled` waits rather than exits. At startup
+  DockTail also waits up to 15 seconds for the socket before its first
+  reconcile, so a sidecar that is still starting does not delay your Services
+  by a whole `RECONCILE_INTERVAL`.
 - Set `EXIT_ON_SOCKET_LOSS=false` to disable it and keep the old behaviour of
   retrying forever.
 
@@ -181,7 +184,7 @@ binary prints it on request:
 ```bash
 docker exec docktail /app/docktail --version
 # or, without a running container:
-docker run --rm --entrypoint /app/docktail ghcr.io/marvinvr/docktail:latest --version
+docker run --rm ghcr.io/marvinvr/docktail:latest --version
 ```
 
 Include that version in bug reports.
