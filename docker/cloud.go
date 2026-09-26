@@ -433,6 +433,19 @@ func (c *Client) RestartCount(ctx context.Context, containerID string) int {
 	return in.RestartCount
 }
 
+// IsRunning best-effort reads whether a container's main process is running via
+// inspect. ok is false when the inspect fails.
+func (c *Client) IsRunning(ctx context.Context, containerID string) (running, ok bool) {
+	if containerID == "" {
+		return false, false
+	}
+	in, err := c.cli.ContainerInspect(ctx, containerID)
+	if err != nil || in.State == nil {
+		return false, false
+	}
+	return in.State.Running, true
+}
+
 // InspectCloud inspects a container and extracts the runtime fields the cloud
 // catalog wants. It is read-only.
 func (c *Client) InspectCloud(ctx context.Context, containerID string) (CloudInfo, error) {

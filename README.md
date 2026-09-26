@@ -137,7 +137,7 @@ labels:
 Once you run DockTail on more than one machine, "is it still up?" gets tedious. [DockTail Cloud](https://docktail.org/cloud/) is a hosted dashboard for that — and because it already has the Docker and Tailscale context, it tells you *which* kind of broken you're looking at:
 
 ```text
-● down · OOM-killed                   →  Docker reported an OOM kill
+● down · OOM-killed                   →  the container was killed for running out of memory
 ● local up · awaiting approval        →  the app is fine, the exposure isn't
 ● host offline · heartbeat missing    →  the box stopped reporting
 ```

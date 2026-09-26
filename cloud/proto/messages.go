@@ -211,6 +211,16 @@ type Event struct {
 	HealthStatus  string    `json:"health_status,omitempty"` // for health_status
 	Message       string    `json:"message,omitempty"`
 	OccurredAt    int64     `json:"occurred_at"` // unix ms
+	// ContainerRunning is set on oom: whether the container's main process was
+	// still running when the agent inspected it. Docker emits `oom` for ANY
+	// process the kernel kills in the container's cgroup, so true means a child
+	// (a worker, a transcoder) died and the container itself kept serving. nil
+	// when the inspect failed, or from an agent that predates the field.
+	ContainerRunning *bool `json:"container_running,omitempty"`
+	// OOMKilled is set on die: an oom event for this container immediately
+	// preceded the exit, so the exit is the OOM kill. The oom event alone cannot
+	// say so — it can arrive before Docker has processed the exit.
+	OOMKilled bool `json:"oom_killed,omitempty"`
 }
 
 // EventKind enumerates the docker failure signals the agent forwards.
