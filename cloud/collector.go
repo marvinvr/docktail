@@ -65,6 +65,9 @@ type Collector struct {
 	// own locks; never hold c.mu across a spool call.
 	offline spool
 
+	oomMu   sync.Mutex           // guards oomSeen
+	oomSeen map[string]time.Time // container ID -> time of its last docker oom event, so the die that follows can be tied to it
+
 	probeMu     sync.Mutex                 // serializes control-plane probes; guards probedAt + probeReport
 	probedAt    time.Time                  // last Tailscale control-plane read, for the agent-side minimum interval
 	probeReport proto.TailnetControlReport // last answer, re-served when the cloud asks again too soon
@@ -125,6 +128,7 @@ func NewCollector(ctx context.Context, cfg Config, dc *docker.Client, ts tailnet
 		specs:          specs,
 		logOverrides:   map[string]string{},
 		checkFails:     map[string]int{},
+		oomSeen:        map[string]time.Time{},
 		prevCPU:        map[string]cpuSample{},
 		prevCPUOther:   map[string]cpuSample{},
 		hostMx:         hmr,
@@ -385,6 +389,7 @@ func (c *Collector) mapEvents(ctx context.Context, msg events.Message) []proto.E
 
 	switch {
 	case msg.Action == events.ActionDie:
+		oomKilled := c.takeRecentOOM(msg.Actor.ID, eventTime(msg))
 		out := make([]proto.Event, 0, len(bases)*2)
 		for _, base := range bases {
 			ev := base
@@ -392,6 +397,7 @@ func (c *Collector) mapEvents(ctx context.Context, msg events.Message) []proto.E
 			if code, ok := atoiPtr(attrs["exitCode"]); ok {
 				ev.ExitCode = code
 			}
+			ev.OOMKilled = oomKilled
 			out = append(out, ev)
 		}
 		if rc := c.docker.RestartCount(ctx, msg.Actor.ID); rc > restartLoopThreshold {
@@ -404,7 +410,19 @@ func (c *Collector) mapEvents(ctx context.Context, msg events.Message) []proto.E
 		}
 		return out
 	case msg.Action == events.ActionOOM:
-		return eventsWithKind(bases, proto.EventOOM)
+		// Docker emits oom for any process the kernel kills in the container's
+		// cgroup — often a child while the container keeps running. Say which, so
+		// the cloud does not report a live container as down. The inspect can race
+		// the exit of a main process being killed and still read running; the die
+		// that follows is then tied back to this oom (takeRecentOOM).
+		c.noteOOM(msg.Actor.ID, eventTime(msg))
+		out := eventsWithKind(bases, proto.EventOOM)
+		if running, ok := c.docker.IsRunning(ctx, msg.Actor.ID); ok {
+			for i := range out {
+				out[i].ContainerRunning = &running
+			}
+		}
+		return out
 	case msg.Action == events.ActionStart:
 		return eventsWithKind(bases, proto.EventStart)
 	case msg.Action == events.ActionStop || msg.Action == events.ActionRestart:
@@ -526,6 +544,44 @@ func healthStatusFromEvent(action string, attrs map[string]string) string {
 	return ""
 }
 
+// oomDieWindow is how soon after an oom event a die of the same container
+// counts as the OOM kill. Docker reports the exit milliseconds after the oom; the
+// slack only absorbs a slow daemon.
+const oomDieWindow = 10 * time.Second
+
+// noteOOM records an oom event for containerID and drops stale entries.
+func (c *Collector) noteOOM(containerID string, at time.Time) {
+	if containerID == "" {
+		return
+	}
+	c.oomMu.Lock()
+	defer c.oomMu.Unlock()
+	for id, seen := range c.oomSeen {
+		if at.Sub(seen) > oomDieWindow {
+			delete(c.oomSeen, id)
+		}
+	}
+	c.oomSeen[containerID] = at
+}
+
+// takeRecentOOM reports whether containerID had an oom event within
+// oomDieWindow before at, consuming it.
+func (c *Collector) takeRecentOOM(containerID string, at time.Time) bool {
+	c.oomMu.Lock()
+	defer c.oomMu.Unlock()
+	seen, ok := c.oomSeen[containerID]
+	if !ok {
+		return false
+	}
+	delete(c.oomSeen, containerID)
+	d := at.Sub(seen)
+	return d >= 0 && d <= oomDieWindow
+}
+
+func eventTime(msg events.Message) time.Time {
+	return time.UnixMilli(eventMillis(msg))
+}
+
 func eventMillis(msg events.Message) int64 {
 	if msg.TimeNano > 0 {
 		return msg.TimeNano / 1_000_000
@@ -552,7 +608,13 @@ func atoiPtr(s string) (*int, bool) {
 // cloud opens an incident for; healthy/starting transitions carry no incident.
 func (c *Collector) maybeCaptureLogs(ctx context.Context, conn *wsConn, ev proto.Event) {
 	switch ev.Kind {
-	case proto.EventDie, proto.EventOOM, proto.EventRestartLoop:
+	case proto.EventDie, proto.EventRestartLoop:
+	case proto.EventOOM:
+		// A process killed inside a container that kept running opens no incident
+		// in the cloud, so there is nothing for an excerpt to attach to.
+		if ev.ContainerRunning != nil && *ev.ContainerRunning {
+			return
+		}
 	case proto.EventHealthStatus:
 		if !strings.EqualFold(ev.HealthStatus, "unhealthy") {
 			return
