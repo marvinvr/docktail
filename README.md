@@ -75,7 +75,7 @@ docker compose up -d
 curl http://myapp.your-tailnet.ts.net
 ```
 
-This assumes the Docker host is connected to Tailscale and allowed to advertise services. See the full docs for host setup, sidecar setup, rootless Docker, OAuth permissions, ACLs, labels, Funnel, and examples.
+This assumes the Docker host is connected to Tailscale and allowed to advertise services. See the full docs for host setup, sidecar setup, rootless Docker, OAuth permissions, ACLs, labels, Funnel, and examples. [`docker-compose.yaml`](docker-compose.yaml) is a ready-to-run version of this setup; for Podman, Synology, Unraid, TrueNAS, macOS, Windows, Swarm and Kubernetes see the [platform guides](docs/02-platforms.md), and for a read-only Docker socket proxy and dropped capabilities see [Hardening](docs/02-security.md).
 
 For Docker secrets or other mounted secret files, set `FILE__TAILSCALE_OAUTH_CLIENT_ID` / `FILE__TAILSCALE_OAUTH_CLIENT_SECRET` or `TAILSCALE_OAUTH_CLIENT_ID_FILE` / `TAILSCALE_OAUTH_CLIENT_SECRET_FILE` to the mounted file paths instead of putting the values directly in the environment.
 
@@ -137,7 +137,7 @@ labels:
 Once you run DockTail on more than one machine, "is it still up?" gets tedious. [DockTail Cloud](https://docktail.org/cloud/) is a hosted dashboard for that — and because it already has the Docker and Tailscale context, it tells you *which* kind of broken you're looking at:
 
 ```text
-● down · OOM-killed                   →  Docker reported an OOM kill
+● down · OOM-killed                   →  the container was killed for running out of memory
 ● local up · awaiting approval        →  the app is fine, the exposure isn't
 ● host offline · heartbeat missing    →  the box stopped reporting
 ```
@@ -150,6 +150,8 @@ environment:
 ```
 
 Without the key the module is completely inert: no connection is opened and DockTail behaves exactly as before. The link is outbound-only and metadata-only — the protocol has no exec, deploy, or shell message types, which you can verify in [`cloud/`](cloud/).
+
+DockTail Cloud is a paid service ([plans and pricing](https://docktail.org/cloud/#pricing)); a new workspace can connect one host as an unmonitored preview before you choose a plan. [`docker-compose.cloud.yaml`](docker-compose.cloud.yaml) is a complete example.
 
 [Explore DockTail Cloud](https://docktail.org/cloud/) · [open the dashboard](https://cloud.docktail.org/login) · [agent setup](docs/06-cloud.md)
 
