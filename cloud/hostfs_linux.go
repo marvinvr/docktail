@@ -121,7 +121,7 @@ func resolveHostRoot() string {
 	if root == "" || root == "/" {
 		return ""
 	}
-	if _, err := os.Stat(filepath.Join(root, "proc", "1", "mounts")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, "proc", "1", "mounts")); err != nil { //nolint:gosec // G703: the operator names the host root via DOCKTAIL_HOST_ROOT on purpose; only stat-ed
 		return ""
 	}
 	return root
