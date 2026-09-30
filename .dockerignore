@@ -32,7 +32,7 @@ coverage.txt
 
 # Docker
 Dockerfile
-docker-compose.yaml
+docker-compose*.yaml
 .dockerignore
 
 # Example data

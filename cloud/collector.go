@@ -103,7 +103,7 @@ type containerStats struct {
 // NewCollector builds a Collector, reading the host fingerprint (docker engine
 // ID) and versions up front. Returns an error only if the engine ID can't be
 // read — without it there is no stable host identity. ts reads the local
-// tailscale daemon (peer liveness, node identity) and, when API credentials are
+// tailscale daemon (node identity, MagicDNS name) and, when API credentials are
 // configured, the Tailscale control plane behind the tailnet vantage; pass nil
 // to run without any tailnet signals.
 func NewCollector(ctx context.Context, cfg Config, dc *docker.Client, ts tailnetSource, logger zerolog.Logger) (*Collector, error) {
@@ -701,18 +701,57 @@ func (c *Collector) captureAndSend(ctx context.Context, conn *wsConn, serviceKey
 
 // Run is the reconnect loop. It blocks until ctx is cancelled. Each iteration
 // dials, performs the hello handshake, and (on accept) serves until the
-// connection drops, then backs off — unless the rejection is terminal.
+// connection drops, then backs off. A rejection decides the pace (see
+// helloRejection); a terminal one parks the collector in stopped, which keeps
+// repeating the reason until the container restarts.
 func (c *Collector) Run(ctx context.Context) {
 	bo := newBackoff()
+	var rareSince time.Time // start of the current run of consecutive rejectRetryRare rejections
+	var hinted string       // reason whose full hint was last logged, at hintedAt
+	var hintedAt time.Time
 	for ctx.Err() == nil {
-		if c.session(ctx, bo) {
-			return // terminal rejection
-		}
+		accepted, rej := c.session(ctx, bo)
 		if ctx.Err() != nil {
 			return
 		}
-		d := bo.next()
-		c.log.Info().Dur("backoff", d).Msg("cloud: reconnecting after backoff")
+		if accepted || (rej != nil && rej.action != rejectRetryRare) {
+			rareSince = time.Time{}
+		}
+		if accepted {
+			hinted = ""
+		}
+		var d time.Duration
+		switch {
+		case rej == nil:
+			d = bo.next()
+		case rej.action == rejectStop:
+			c.stopped(ctx, *rej)
+			return
+		case rej.action == rejectRetryRare:
+			if rareSince.IsZero() {
+				rareSince = time.Now()
+			} else if time.Since(rareSince) >= rareRetryWindow {
+				c.stopped(ctx, rej.gaveUp())
+				return
+			}
+			d = bo.around(rareRetryInterval)
+		case rej.action == rejectRetrySlow:
+			bo.slow()
+			d = bo.next()
+		default:
+			d = bo.next()
+		}
+		switch {
+		case rej == nil:
+			c.log.Info().Dur("backoff", d).Msg("cloud: reconnecting after backoff")
+		case rej.reason != hinted || time.Since(hintedAt) >= reminderInterval:
+			// The full hint on the first rejection and every reminderInterval;
+			// the 30–60 s retries in between log one short line.
+			hinted, hintedAt = rej.reason, time.Now()
+			c.log.Warn().Str("reason", rej.reason).Dur("retry_in", d.Round(time.Second)).Msg("cloud: connection rejected. " + rej.hint)
+		default:
+			c.log.Warn().Str("reason", rej.reason).Dur("retry_in", d.Round(time.Second)).Msg("cloud: connection rejected again")
+		}
 		select {
 		case <-ctx.Done():
 			return
@@ -721,19 +760,22 @@ func (c *Collector) Run(ctx context.Context) {
 	}
 }
 
-// session runs one connection lifetime; stop=true means give up entirely.
-func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
+// session runs one connection lifetime. accepted reports that the cloud took the
+// hello; rej is set when the cloud refused the connection (a 401/403 upgrade or a
+// rejecting hello_ack). Both zero means an ordinary failure or disconnect.
+func (c *Collector) session(ctx context.Context, bo *backoff) (accepted bool, rej *rejection) {
 	dialCtx, dialCancel := context.WithTimeout(ctx, 20*time.Second)
 	conn, err := dial(dialCtx, c.cfg.URL, c.cfg.Key, c.log)
 	dialCancel()
 	if err != nil {
 		var de *dialError
-		if asDialError(err, &de) && (de.statusCode == 401 || de.statusCode == 403) {
-			c.log.Error().Int("status", de.statusCode).Msg("cloud: connection rejected (auth) — stopping")
-			return true
+		if asDialError(err, &de) {
+			if r := httpRejection(de.statusCode); r != nil {
+				return false, r
+			}
 		}
 		c.log.Warn().Err(err).Msg("cloud: dial failed")
-		return false
+		return false, nil
 	}
 
 	connCtx, connCancel := context.WithCancel(ctx)
@@ -761,42 +803,31 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
 	if !c.sendHello(connCtx, conn) {
 		connCancel()
 		<-runDone
-		return false
+		return false, nil
 	}
 
 	select {
 	case <-connCtx.Done():
 		<-runDone
-		return false
+		return false, nil
 	case err := <-runDone:
 		if err != nil {
 			c.log.Warn().Err(err).Msg("cloud: connection closed before hello_ack")
 		}
-		return false
+		return false, nil
 	case ack := <-ackCh:
 		if !ack.Accepted {
-			if terminalReject(ack.Reason) {
-				c.log.Error().Str("reason", string(ack.Reason)).Msg("cloud: hello rejected (terminal) — stopping")
-				connCancel()
-				<-runDone
-				return true
-			}
-			if ack.Reason == proto.RejectEnrollmentClosed {
-				// An operator can reopen the key's enrollment window, so keep
-				// retrying automatically without flooding the logs while closed.
-				bo.slow()
-			}
-			c.log.Warn().Str("reason", string(ack.Reason)).Msg("cloud: hello rejected — will retry")
+			r := helloRejection(ack.Reason)
 			connCancel()
 			<-runDone
-			return false
+			return false, &r
 		}
 		c.log.Info().Str("host_id", ack.HostID).Int("config_version", ack.ConfigVersion).Msg("cloud: connected and accepted")
 	case <-time.After(15 * time.Second):
 		c.log.Warn().Msg("cloud: timed out waiting for hello_ack")
 		connCancel()
 		<-runDone
-		return false
+		return false, nil
 	}
 
 	// Accepted. Publish the connection, send an immediate snapshot from the last
@@ -821,7 +852,7 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
 		go c.metricsLoop(connCtx, conn)
 	}
 	if c.tailnet != nil {
-		go c.tailnetLoop(connCtx, conn)
+		go c.selfDNSNameLoop(connCtx)
 	}
 
 	err = <-runDone
@@ -829,7 +860,7 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (stop bool) {
 	if err != nil {
 		c.log.Warn().Err(err).Msg("cloud: connection closed")
 	}
-	return false
+	return true, nil
 }
 
 func (c *Collector) heartbeatLoop(ctx context.Context, conn *wsConn) {
@@ -1278,15 +1309,6 @@ func (c *Collector) logModeFor(serviceKey string) string {
 		return proto.LogModeOff
 	}
 	return c.logMode
-}
-
-func terminalReject(reason proto.RejectCode) bool {
-	switch reason {
-	case proto.RejectInvalidKey, proto.RejectBlocked, proto.RejectProtocolMismatch:
-		return true
-	default:
-		return false
-	}
 }
 
 func asDialError(err error, target **dialError) bool {
