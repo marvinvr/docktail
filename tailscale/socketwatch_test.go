@@ -1,6 +1,7 @@
 package tailscale
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -247,5 +248,58 @@ func TestWatchdogRunDisabled(t *testing.T) {
 				t.Fatal("onLost must not fire when the watchdog is off")
 			}
 		})
+	}
+}
+
+func TestWaitForSocketAlreadyReachable(t *testing.T) {
+	path := socketPath(t)
+	listenUnix(t, path)
+
+	c := &Client{socketPath: path}
+	if err := c.WaitForSocket(t.Context(), time.Second, 10*time.Millisecond); err != nil {
+		t.Fatalf("expected no wait for a reachable socket, got %v", err)
+	}
+}
+
+// The sidecar case the startup wait exists for: tailscaled starts listening a
+// moment after DockTail does.
+func TestWaitForSocketBecomesReachable(t *testing.T) {
+	path := socketPath(t)
+	c := &Client{socketPath: path}
+
+	listening := make(chan net.Listener, 1)
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		ln, _ := net.Listen("unix", path) // nil on error, checked below
+		listening <- ln
+	}()
+
+	err := c.WaitForSocket(t.Context(), 5*time.Second, 10*time.Millisecond)
+	ln := <-listening
+	if ln == nil {
+		t.Fatal("could not listen on the test socket")
+	}
+	_ = ln.Close()
+	if err != nil {
+		t.Fatalf("expected the socket to be found once it appears, got %v", err)
+	}
+}
+
+func TestWaitForSocketTimesOut(t *testing.T) {
+	c := &Client{socketPath: socketPath(t)}
+
+	err := c.WaitForSocket(t.Context(), 50*time.Millisecond, 10*time.Millisecond)
+	if !IsSocketUnreachable(err) {
+		t.Fatalf("expected the last probe error after the timeout, got %v", err)
+	}
+}
+
+func TestWaitForSocketCancelled(t *testing.T) {
+	c := &Client{socketPath: socketPath(t)}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := c.WaitForSocket(ctx, 5*time.Second, 10*time.Millisecond); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
 	}
 }

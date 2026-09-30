@@ -82,7 +82,7 @@ func NewClient(cfg ClientConfig) *Client {
 
 	// Prefer OAuth over API key
 	if cfg.OAuthClientID != "" && cfg.OAuthClientSecret != "" {
-		oauthConfig := &clientcredentials.Config{
+		oauthConfig := &clientcredentials.Config{ //nolint:gosec // G101: TokenURL is a public endpoint; the credentials come from the environment
 			ClientID:     cfg.OAuthClientID,
 			ClientSecret: cfg.OAuthClientSecret,
 			TokenURL:     "https://api.tailscale.com/api/v2/oauth/token",

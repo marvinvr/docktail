@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -16,15 +19,26 @@ import (
 
 	"github.com/marvinvr/docktail/cloud"
 	"github.com/marvinvr/docktail/docker"
+	"github.com/marvinvr/docktail/health"
 	"github.com/marvinvr/docktail/reconciler"
 	"github.com/marvinvr/docktail/tailscale"
+	"github.com/marvinvr/docktail/version"
 )
 
+// socketStartupWait bounds how long startup waits for a tailscaled that is not
+// listening yet. DockTail carries on afterwards: the reconcile loop retries and
+// the socket watchdog only arms once the socket has been reachable.
+const socketStartupWait = 15 * time.Second
+
 func main() {
+	if len(os.Args) > 1 {
+		os.Exit(runCommand(os.Args[1:]))
+	}
+
 	// Setup logging
 	setupLogging()
 
-	log.Info().Msg("Starting DockTail")
+	log.Info().Str("version", version.Version).Msg("Starting DockTail")
 
 	// Get configuration from environment
 	reconcileInterval := getEnvDuration("RECONCILE_INTERVAL", 60*time.Second)
@@ -41,6 +55,11 @@ func main() {
 	skipShutdownCleanup := getEnvBool("SKIP_SHUTDOWN_CLEANUP", false)
 	exitOnSocketLoss := getEnvBool("EXIT_ON_SOCKET_LOSS", true)
 	socketLossGracePeriod := getEnvDuration("SOCKET_LOSS_GRACE_PERIOD", 90*time.Second)
+	updateCheck := getEnvBool("UPDATE_CHECK", true)
+	healthFile := health.Path()
+	// A restarted container keeps /tmp: drop the previous run's status so it
+	// cannot vouch for this one before the tracker writes a fresh file.
+	_ = os.Remove(healthFile)
 
 	// Parse default tags, dropping duplicates: the Control Plane stores tags
 	// as a set, so a duplicated default would register as permanent drift and
@@ -96,6 +115,8 @@ func main() {
 		Bool("skip_shutdown_cleanup", skipShutdownCleanup).
 		Bool("exit_on_socket_loss", exitOnSocketLoss).
 		Dur("socket_loss_grace_period", socketLossGracePeriod).
+		Bool("update_check", updateCheck).
+		Str("health_file", healthFile).
 		Msg("Configuration loaded")
 
 	// Create Docker client
@@ -118,6 +139,26 @@ func main() {
 		DeleteUnusedServices: deleteUnusedServices,
 	})
 
+	// tailscaled may still be starting (a sidecar behind a plain depends_on, a
+	// host that is booting). Give it a bounded moment before the version check
+	// and the first reconcile, both of which need the daemon. A signal during
+	// the wait exits cleanly: nothing has been advertised yet that would need
+	// cleaning up.
+	waitCtx, stopWait := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	waitErr := tailscaleClient.WaitForSocket(waitCtx, socketStartupWait, 250*time.Millisecond)
+	interrupted := waitCtx.Err() != nil
+	stopWait()
+	if interrupted {
+		log.Info().Msg("Received shutdown signal while waiting for the Tailscale socket, exiting")
+		return
+	}
+	if waitErr != nil {
+		log.Warn().Err(waitErr).
+			Str("socket", tailscaleSocket).
+			Dur("waited", socketStartupWait).
+			Msg("Tailscale socket is still unreachable; starting anyway and retrying on every reconcile")
+	}
+
 	// Detect CLI/daemon version mismatch (common with host-mode Tailscale)
 	tailscaleClient.DetectVersionMismatch(context.Background())
 	tailscaleClient.WarnIfSocketMissing()
@@ -131,6 +172,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// Local health status: a small JSON file `docktail health` (the image's
+	// HEALTHCHECK) reads back. Nothing listens on a port.
+	healthTracker := health.NewTracker(healthFile, version.Version, reconcileInterval, log.Logger)
+	healthTracker.SetTailscaleProbe(tailscaleClient.ProbeSocket)
+	rec.SetResultHook(func(err error) {
+		healthTracker.ReconcileDone(err, errors.Is(err, reconciler.ErrListContainers))
+	})
+
 	// Optional: DockTail Cloud reporting module. Completely inert unless
 	// DOCKTAIL_CLOUD_KEY is set — DockTail runs exactly as before without it.
 	if cloud.Enabled() {
@@ -138,7 +187,15 @@ func main() {
 		collector, cerr := cloud.NewCollector(ctx, cloudCfg, dockerClient, tailscaleClient, log.Logger)
 		if cerr != nil {
 			log.Error().Err(cerr).Msg("DockTail Cloud enabled but failed to initialize; continuing without it")
+			failedAt, reason := time.Now(), cerr.Error()
+			healthTracker.SetCloudSource(func() *health.Cloud {
+				return &health.Cloud{State: health.CloudFailed, Since: failedAt, Reason: reason}
+			})
 		} else {
+			healthTracker.SetCloudSource(func() *health.Cloud {
+				s := collector.LinkStatus()
+				return &health.Cloud{State: s.State, Since: s.Since, Reason: s.Reason}
+			})
 			rec.SetObserver(collector)
 			go collector.Run(ctx)
 			log.Info().
@@ -174,6 +231,10 @@ func main() {
 		},
 	)
 	go watchdog.Run(ctx)
+	go healthTracker.Run(ctx)
+	if updateCheck {
+		go version.RunUpdateCheck(ctx, log.Logger)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -273,7 +334,7 @@ func getEnvFileValue(fileKey string) (string, bool) {
 		return "", false
 	}
 
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(path) //nolint:gosec // G304: the operator names this file via FILE__<VAR> / <VAR>_FILE on purpose
 	if err != nil {
 		log.Fatal().
 			Err(err).
@@ -343,4 +404,39 @@ func logCredentialWarnings(tailscaleAPIKey, tailscaleOAuthClientID, tailscaleOAu
 
 		event.Msg("Incomplete Tailscale OAuth configuration; both OAuth environment variables must be set to enable OAuth-based auto-service creation")
 	}
+}
+
+// runCommand handles the command-line invocations; DockTail itself takes no
+// arguments. It returns the process exit code.
+func runCommand(args []string) int {
+	switch args[0] {
+	case "--version", "-version", "-v", "version":
+		fmt.Println("docktail " + version.Version)
+		return 0
+	case "health", "healthcheck":
+		// Exit 0 when healthy and 1 otherwise, as Docker's HEALTHCHECK expects.
+		ok, summary := health.Check(health.Path(), time.Now())
+		fmt.Println(summary)
+		if !ok {
+			return 1
+		}
+		return 0
+	case "--help", "-help", "-h", "help":
+		printUsage(os.Stdout)
+		return 0
+	default:
+		_, _ = fmt.Fprintf(os.Stderr, "docktail: unknown argument %q\n\n", args[0])
+		printUsage(os.Stderr)
+		return 2
+	}
+}
+
+func printUsage(w io.Writer) {
+	_, _ = fmt.Fprint(w, `Usage:
+  docktail            run DockTail (configured through environment variables)
+  docktail --version  print the version and exit
+  docktail health     report whether the running DockTail is healthy (exit 0) or not (exit 1)
+
+Documentation: https://docktail.org/docs/
+`)
 }

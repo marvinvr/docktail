@@ -12,6 +12,9 @@ docktail
 *.out
 coverage.txt
 
+# GoReleaser output
+dist/
+
 # IDE files
 .vscode/
 .idea/

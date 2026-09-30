@@ -1244,6 +1244,20 @@ else
     pass "no FATAL or panic in logs"
 fi
 
+# The image's HEALTHCHECK runs `docktail health`, which reads the status file
+# the running process keeps current.
+if health_out=$(docker exec "$DOCKTAIL_CONTAINER" /app/docktail health 2>&1); then
+    pass "docktail health reports healthy ($health_out)"
+else
+    fail "docktail health reports unhealthy: $health_out"
+fi
+
+if version_out=$(docker exec "$DOCKTAIL_CONTAINER" /app/docktail --version 2>&1) && [[ "$version_out" == docktail\ * ]]; then
+    pass "docktail --version prints the version ($version_out)"
+else
+    fail "docktail --version failed: $version_out"
+fi
+
 # ==============================================================================
 # Summary
 # ==============================================================================

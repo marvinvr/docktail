@@ -2,6 +2,7 @@ package reconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -12,6 +13,11 @@ import (
 	"github.com/marvinvr/docktail/tailscale"
 	apptypes "github.com/marvinvr/docktail/types"
 )
+
+// ErrListContainers marks a reconcile that failed before it could read the
+// containers from Docker — Docker is unreachable, as opposed to a failure while
+// applying one service.
+var ErrListContainers = errors.New("failed to get enabled containers")
 
 // Observer receives reconciler outputs for an optional side-channel consumer —
 // the cloud module (see ../cloud). The reconciler calls these inline, so an
@@ -32,7 +38,14 @@ type Reconciler struct {
 	dockerClient    *docker.Client
 	tailscaleClient *tailscale.Client
 	interval        time.Duration
-	observer        Observer // optional; nil unless the cloud module is enabled
+	observer        Observer        // optional; nil unless the cloud module is enabled
+	onResult        func(err error) // optional; told the outcome of every reconcile
+}
+
+// SetResultHook installs a function told the outcome of every reconcile cycle
+// (nil on success) — the local health status. Safe to call once before Run.
+func (r *Reconciler) SetResultHook(fn func(err error)) {
+	r.onResult = fn
 }
 
 // SetObserver attaches an optional observer (the cloud collector). Pass nil to
@@ -117,14 +130,23 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	}
 }
 
-// Reconcile performs a single reconciliation cycle
+// Reconcile performs a single reconciliation cycle and reports its outcome to
+// the result hook, if one is set.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
+	err := r.reconcile(ctx)
+	if r.onResult != nil {
+		r.onResult(err)
+	}
+	return err
+}
+
+func (r *Reconciler) reconcile(ctx context.Context) error {
 	log.Info().Msg("Starting reconciliation")
 
 	// Get all enabled containers from Docker
 	containers, err := r.dockerClient.GetEnabledContainers(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to get enabled containers: %w", err)
+		return fmt.Errorf("%w: %w", ErrListContainers, err)
 	}
 
 	log.Info().
