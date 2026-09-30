@@ -4,6 +4,7 @@ package cloud
 
 import (
 	"bufio"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -212,13 +213,13 @@ func statfsBytes(path string) (proto.Filesystem, bool) {
 	if err := syscall.Statfs(path, &st); err != nil {
 		return proto.Filesystem{}, false
 	}
-	bs := uint64(st.Bsize)
-	if bs == 0 || uint64(st.Blocks) == 0 {
+	if st.Bsize <= 0 || uint64(st.Blocks) == 0 {
 		return proto.Filesystem{}, false
 	}
-	total := int64(uint64(st.Blocks) * bs)
-	free := int64(uint64(st.Bfree) * bs)
-	avail := int64(uint64(st.Bavail) * bs)
+	bs := uint64(st.Bsize)
+	total := saturatingInt64(uint64(st.Blocks) * bs)
+	free := saturatingInt64(uint64(st.Bfree) * bs)
+	avail := saturatingInt64(uint64(st.Bavail) * bs)
 	if total <= 0 {
 		return proto.Filesystem{}, false
 	}
@@ -230,6 +231,15 @@ func statfsBytes(path string) (proto.Filesystem, bool) {
 		avail = 0
 	}
 	return proto.Filesystem{TotalBytes: total, UsedBytes: used, AvailBytes: avail}, true
+}
+
+// saturatingInt64 converts a byte count to the int64 the report carries,
+// capping it instead of wrapping to a negative value.
+func saturatingInt64(u uint64) int64 {
+	if u > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(u)
 }
 
 // usedFraction is the `df` reading — used of what a normal user can still fill.
