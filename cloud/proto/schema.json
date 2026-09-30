@@ -114,7 +114,9 @@
         "restart_count": { "type": "integer" },
         "health_status": { "type": "string" },
         "message": { "type": "string" },
-        "occurred_at": { "type": "integer" }
+        "occurred_at": { "type": "integer" },
+        "container_running": { "type": "boolean", "description": "oom: the container's main process was still running after the kill (only a child process died)" },
+        "oom_killed": { "type": "boolean", "description": "die: an oom event for this container immediately preceded the exit" }
       }
     },
     "CheckResults": {

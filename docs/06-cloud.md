@@ -4,6 +4,8 @@ DockTail Cloud is optional, opt-in monitoring for DockTail-managed services acro
 
 [Explore DockTail Cloud](https://docktail.org/cloud/) or [open the dashboard](https://cloud.docktail.org/login).
 
+DockTail Cloud is a paid service, priced by host count ([plans and pricing](https://docktail.org/cloud/#pricing)); the agent code that reports to it is the same open-source DockTail. Until you choose a plan, a new workspace can connect one host as a preview: it shows up online, but Cloud runs no checks and raises no incidents or alerts for it. A workspace's first subscription can come with an introductory offer, such as a free trial or a reduced first-months price; the dashboard shows which one applies when you choose a plan.
+
 ### What You Get
 
 - **One view of every host and service.** The full catalog of DockTail-managed services, plus a read-only inventory of the host's other containers, with health history.
@@ -15,10 +17,18 @@ Reporting rides along with the normal agent — there is no separate binary. The
 
 ### How To Enable
 
+Before you start:
+
+- **Tailscale API credentials.** Configure `TAILSCALE_OAUTH_CLIENT_ID`/`TAILSCALE_OAUTH_CLIENT_SECRET` (or `TAILSCALE_API_KEY`) first, as in [Tailscale Admin Setup](03-tailscale-admin.md#tailscale-admin-setup). Cloud's [tailnet vantage](#tailnet-health) reads the control plane through them, and one credentialed host per tailnet is enough. With none, Cloud reports "no Tailscale credentials" instead of approval and advertisement state; everything else still works.
+- **A working DockTail.** The host is tagged, and its services already show up on the tailnet without Cloud.
+- **A plan, for monitoring.** You can connect the first host before choosing one; it stays an unmonitored preview until you do (see above).
+
+Then:
+
 1. Create a workspace in the DockTail Cloud dashboard and copy the workspace key (`dtc_...`).
 2. Set `DOCKTAIL_CLOUD_KEY` on the DockTail agent.
 
-That is the only configuration — the cloud endpoint is built into the agent.
+That is the only configuration — the cloud endpoint is built into the agent. A complete Compose file with it is [`docker-compose.cloud.yaml`](https://github.com/marvinvr/docktail/blob/main/docker-compose.cloud.yaml).
 
 ```yaml
 services:
@@ -48,7 +58,7 @@ connection when that changes; the agent does not need a restart.
 | Variable | Default | Description |
 | --- | --- | --- |
 | `DOCKTAIL_CLOUD_KEY` | - | Workspace key (`dtc_...`) from the cloud dashboard. Enables reporting. Inert when unset. |
-| `DOCKTAIL_LOG_LEVEL` | `info` | Log level for the cloud module: `debug`, `info`, `warn`, or `error`. |
+| `DOCKTAIL_LOG_LEVEL` | `info` | Read, but currently has no effect: the cloud module logs at the level `LOG_LEVEL` sets. |
 | `DOCKTAIL_CHECK_INTERVAL` | `30s` | How often local-vantage checks run (5s–5m). |
 | `DOCKTAIL_HOST_ROOT` | `/host` | Where the host's root filesystem is bind-mounted, for whole-host disk usage (see [Disk Usage](#disk-usage)). Only used when that path exists. |
 
@@ -65,8 +75,8 @@ When enabled, the agent reports the following operational data:
 
 - Periodic snapshots of DockTail-managed services, including stopped containers, plus refreshes after successful reconciles.
 - A read-only inventory of the host's **other** containers — the ones *not* published with `docktail.*` labels, including stopped ones — with name, image, state/health, ports, and live CPU/memory. These containers are not actively probed; they are listed on the dashboard so you can see the host's whole Docker footprint, and can be explicitly watched for Docker-event-driven incidents and alerts.
-- Docker failure events, including container exit codes, out-of-memory (OOM) kills, health-status changes, and restart loops.
-- Local-vantage check results. Checks default to TCP; cloud-managed config may select HTTP, a relative path, and expected status, but the destination always comes from the agent's local service discovery.
+- Docker failure events, including container exit codes, out-of-memory (OOM) kills, health-status changes, and restart loops. Docker reports an OOM event whenever the kernel kills *any* process in a container, so the agent also says whether the container kept running. A killed child process (a worker, a transcoder) in a container that stays up is recorded as an event, not reported as the service going down; only an OOM kill that stops the container is.
+- Local-vantage check results. Checks default to TCP; cloud-managed config may select HTTP, a relative path, and expected status, but the destination always comes from the agent's local service discovery. HTTP checks are plain HTTP to the container and do not follow redirects; with an expected status set, only that exact status passes, otherwise any answer below 500 counts as up. Each probe allows up to 15 seconds, so a slow service that still answers is reported with its latency (Cloud can flag it as degraded) rather than as down.
 - Whole-host vitals, sampled every 30 seconds: CPU, memory and swap usage, load average, temperature where the machine has sensors, and per-filesystem disk usage (mount point, total, used, and available bytes, at most 16 filesystems). These describe the machine, not the containers; nothing is stored as history, each report replaces the last. Disk is read on Linux only, from `/proc/mounts` and `statfs`, and covers real filesystems only — network mounts such as NFS and CIFS are deliberately skipped, so an unresponsive NAS can never stall reporting.
 - Tailscale control-plane service state, when Cloud asks for it (see [Tailnet Health](#tailnet-health)).
 - For a Funnel-exposed service, this node's MagicDNS name — the public address its Funnel answers on (see [Public Health](#public-health)).
@@ -175,7 +185,8 @@ events, metrics, and incidents are unaffected.
 
 Each host is identified by its Docker engine ID, used as a stable fingerprint.
 A workspace key can enroll multiple hosts while its enrollment window is open
-(one hour by default). After the window closes, the key continues to authenticate
+(one hour by default; the dashboard's agent key settings offer other lengths when a
+key is created or its enrollment reopened). After the window closes, the key continues to authenticate
 the hosts it already enrolled but cannot add another fingerprint until an
 operator reopens enrollment in the Cloud dashboard. An agent waiting for a
 reopened window retries automatically at a low rate.
@@ -187,3 +198,26 @@ match to associate each service advertisement with its host. The tailnet name
 groups the hosts that share a control plane, so Cloud knows which single host to
 ask for tailnet health. Neither is required — without them the agent simply
 reports fewer signals.
+
+### Connection Problems
+
+When Cloud refuses a connection, the agent logs the reason code and what to do
+about it (`cloud: connection rejected. …` when it will retry,
+`cloud: stopped reporting until this container restarts. …` when it will not).
+The explanation repeats about every 30 minutes, so it stays near the end of
+`docker logs`. DockTail itself keeps serving your services either way; only
+reporting stops.
+
+| Reason | Meaning | What the agent does | Fix |
+| --- | --- | --- | --- |
+| `http_401`, `invalid_key` | The workspace key was revoked, its workspace was deleted, or it is mistyped. | Stops. | Create a new agent key at [cloud.docktail.org/settings/agent-keys](https://cloud.docktail.org/settings/agent-keys), set it as `DOCKTAIL_CLOUD_KEY`, and recreate the container (`docker compose up -d`). |
+| `blocked` | This host was blocked in the dashboard. | Checks again about every 15 minutes for up to 24 hours, then stops. | Unblock it at [cloud.docktail.org/hosts](https://cloud.docktail.org/hosts). After 24 hours, also restart the container. |
+| `protocol_mismatch` | This DockTail image speaks a wire protocol Cloud no longer accepts. | Checks again about every 15 minutes for up to 24 hours, then stops. | Pull the latest DockTail image and recreate the container. |
+| `http_403` | Something between the host and Cloud (a proxy, firewall, or WAF) refused the connection. | Checks again about every 15 minutes for up to 24 hours, then stops. | Allow outbound WebSocket connections to Cloud. After 24 hours, also restart the container. |
+| `enrollment_closed` | The key's enrollment window closed before this host joined. | Retries every 30–60 seconds. | Reopen enrollment for the key at [cloud.docktail.org/settings/agent-keys](https://cloud.docktail.org/settings/agent-keys), or recreate the container with a new key. |
+| `over_cap` | The workspace has reached its host limit. | Retries every 30–60 seconds. | Upgrade the plan at [cloud.docktail.org/settings/billing](https://cloud.docktail.org/settings/billing) or remove an offline host. |
+
+A key cannot be changed while the container runs, so rotating keys always means
+setting the new `DOCKTAIL_CLOUD_KEY` and recreating the container. Network errors
+and temporary Cloud outages are not rejections: the agent reconnects on its own
+with backoff.
