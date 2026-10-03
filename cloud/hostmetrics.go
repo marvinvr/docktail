@@ -221,8 +221,10 @@ type memInfo struct {
 
 // readMemInfo parses /proc/meminfo. Used is MemTotal-MemAvailable (the kernel's
 // own pressure estimate, which discounts reclaimable page cache), falling back
-// to free+buffers+cached on kernels too old for MemAvailable. Swap used is
-// SwapTotal-SwapFree. meminfo reports kibibytes.
+// to free+buffers+cached on kernels too old for MemAvailable. The shrinkable
+// part of the ZFS ARC is discounted too: the kernel counts it as used, but it
+// is cache that ZFS hands back under pressure. Swap used is SwapTotal-SwapFree.
+// meminfo reports kibibytes.
 func readMemInfo() memInfo {
 	f, err := os.Open(filepath.Join(procDir, "meminfo"))
 	if err != nil {
@@ -249,6 +251,7 @@ func readMemInfo() memInfo {
 	} else {
 		used = total - (vals["MemFree"] + vals["Buffers"] + vals["Cached"])
 	}
+	used -= zfsARCShrinkableBytes() / kib
 	if used < 0 {
 		used = 0
 	}
@@ -280,6 +283,46 @@ func parseMeminfoLine(line string) (key string, kb int64, ok bool) {
 		return "", 0, false
 	}
 	return line[:colon], v, true
+}
+
+// ---- /proc/spl/kstat/zfs/arcstats (ZFS ARC) -------------------------------
+
+// zfsARCShrinkableBytes is how much of the ZFS ARC could be reclaimed right
+// now: its current size above its floor (c_min), the same figure htop and
+// btop discount. The ARC lives outside the page cache, so MemAvailable counts
+// it as used; on a ZFS host (Proxmox, TrueNAS) that alone can read as memory
+// pressure. Zero when ZFS isn't loaded or the stats are unreadable.
+func zfsARCShrinkableBytes() int64 {
+	f, err := os.Open(filepath.Join(procDir, "spl", "kstat", "zfs", "arcstats"))
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = f.Close() }()
+
+	var size, cMin int64
+	var haveSize, haveMin bool
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		// Data lines are "name type value", e.g. "size  4  2408644504".
+		fields := strings.Fields(sc.Text())
+		if len(fields) != 3 {
+			continue
+		}
+		v, err := strconv.ParseInt(fields[2], 10, 64)
+		if err != nil {
+			continue
+		}
+		switch fields[0] {
+		case "size":
+			size, haveSize = v, true
+		case "c_min":
+			cMin, haveMin = v, true
+		}
+	}
+	if !haveSize || !haveMin || size <= cMin {
+		return 0
+	}
+	return size - cMin
 }
 
 // ---- /proc/loadavg (load) -------------------------------------------------
