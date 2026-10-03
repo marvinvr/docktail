@@ -16,6 +16,8 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `SKIP_SHUTDOWN_CLEANUP` | `false` | When `true`, DockTail leaves its services and Funnels advertised on shutdown instead of draining and clearing them. This can keep ports exposed on the tailnet beyond what your current labels define; see [Cleanup Behavior](#cleanup-behavior). |
 | `LOG_LEVEL` | `info` | Logging level for all output, including the DockTail Cloud module: `debug`, `info`, `warn`, or `error`. Any other value means `info`. |
 | `RECONCILE_INTERVAL` | `60s` | State reconciliation interval. |
+| `DOCKTAIL_DISCOVERY` | `containers` | Where DockTail looks for things to expose. `containers` exposes the containers running on **this Docker node**. `swarm` exposes every labelled service in the **whole cluster**, and requires a manager endpoint. See [Docker Swarm](#docker-swarm). |
+| `DOCKTAIL_SWARM_NETWORK` | - | With `DOCKTAIL_DISCOVERY=swarm`: pin which Docker network a service's virtual IP is taken from when the service is attached to several. Defaults to a network DockTail is also attached to, then to the lowest IP. |
 | `DOCKER_HOST` | `unix:///var/run/docker.sock` | Docker daemon socket. Rootless Docker typically uses `unix:///run/user/<uid>/docker.sock`. |
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | The `tailscaled` socket DockTail checks: the startup missing-socket hint, the [socket-loss check](#tailscale-socket-loss), and the image's health check. DockTail does not pass it to the bundled `tailscale` CLI, which does the serve and Funnel work at its own default of `/var/run/tailscale/tailscaled.sock`, so mount the daemon's socket directory at `/var/run/tailscale` either way. |
 | `EXIT_ON_SOCKET_LOSS` | `true` | When `true`, DockTail exits if the Tailscale socket stays unreachable past the grace period, so the container's restart policy can re-establish the mount. See [Tailscale Socket Loss](#tailscale-socket-loss). |
@@ -68,6 +70,50 @@ Local-development overrides: `DOCKTAIL_CLOUD_URL` replaces the built-in ingest
 endpoint. `ws://` is allowed for loopback endpoints; non-loopback plaintext
 requires `DOCKTAIL_CLOUD_ALLOW_INSECURE=true` and must never be used in
 production. Non-loopback production endpoints must use `wss://`.
+
+### Docker Swarm
+
+By default DockTail exposes the containers running on **its own Docker node**. In a Swarm cluster that is a narrow slice of the cluster: the `/containers` endpoint is node-local, on manager nodes as much as workers, so one agent sees only the containers it happens to be colocated with.
+
+`DOCKTAIL_DISCOVERY=swarm` switches to the cluster view. DockTail then lists every labelled **service** in the cluster through the Swarm manager API and advertises each one at its service's virtual IP.
+
+```yaml
+services:
+  docktail:
+    image: ghcr.io/marvinvr/docktail:latest
+    environment:
+      - DOCKTAIL_DISCOVERY=swarm
+      - TAILSCALE_API_KEY=${TAILSCALE_API_KEY}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/tailscale:/var/run/tailscale
+```
+
+What you need to know:
+
+- **A manager endpoint is required.** `/services` is manager-only. On a worker-only agent the reconcile fails and nothing is advertised.
+- **One agent is enough.** Services on every node are covered by the single agent, because the service VIP is cluster-wide.
+- **The overlay carries the traffic.** A service VIP is only dialable from a node attached to the same overlay. Attach DockTail — and therefore the `tailscaled` it configures — to the same network the exposed services use, and prefer that network when picking a VIP. When a service is attached to several networks, DockTail picks one DockTail is also attached to; set `DOCKTAIL_SWARM_NETWORK` to pin it explicitly.
+- **A VIP only exists in `vip` mode.** A `dnsrr` service, or one with no network, has none and is skipped with a warning.
+- **Changes on other nodes arrive on the next reconcile tick.** Docker event watching is still local, so a service created or relabelled on another node is picked up within `RECONCILE_INTERVAL`, not immediately.
+
+Labels come from the service's task template, which is where both `labels:` and `deploy.labels:` land in a compose file — so a Swarm service is labelled exactly like the equivalent standalone container, and every label in [Labels](04-labels.md) applies unchanged.
+
+```yaml
+services:
+  plex:
+    image: lscr.io/linuxserver/plex:latest
+    networks:
+      - tailscale
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=plex"
+      - "docktail.service.port=32400"
+
+networks:
+  tailscale:
+    external: true
+```
 
 ### Supported Protocols
 
