@@ -55,7 +55,7 @@ case "$*" in
   *) echo "Unexpected fake tailscale command: $*" >&2; exit 2 ;;
 esac
 `
-	if err := os.WriteFile(filepath.Join(dir, "tailscale"), []byte(script), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "tailscale"), []byte(script), 0o700); err != nil { //nolint:gosec // G306: the fake CLI in t.TempDir must be owner-executable.
 		t.Fatal(err)
 	}
 	t.Setenv("FAKE_TS_DIR", dir)
@@ -65,7 +65,7 @@ esac
 
 func advertisementCLICalls(t *testing.T, path string) []string {
 	t.Helper()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is the test's call log in t.TempDir.
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestReconcileAdvertisementFollowsDefinitionSync(t *testing.T) {
 		case http.MethodGet:
 			w.WriteHeader(http.StatusNotFound)
 		case http.MethodPut:
-			f, err := os.OpenFile(callsPath, os.O_APPEND|os.O_WRONLY, 0o600)
+			f, err := os.OpenFile(callsPath, os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // G304: callsPath is the test's call log in t.TempDir.
 			if err != nil {
 				t.Error(err)
 				w.WriteHeader(http.StatusInternalServerError)
