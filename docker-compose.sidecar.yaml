@@ -34,6 +34,7 @@ services:
       retries: 30
 
   docktail:
+    stop_grace_period: 40s
     image: ghcr.io/marvinvr/docktail:latest
     container_name: docktail
     depends_on:

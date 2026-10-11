@@ -9,6 +9,7 @@
 services:
   # DockTail service
   dev-docktail:
+    stop_grace_period: 40s
     build: .
     container_name: dev-docktail
     restart: unless-stopped

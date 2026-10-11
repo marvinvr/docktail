@@ -30,7 +30,7 @@ Tailnet clients access container services
 5. If OAuth or API key credentials are configured, it creates service definitions through the Tailscale API and keeps their tags and descriptions in sync with the labels; manual edits to either are overwritten. This runs before any new service is advertised, matching Tailscale's documented order: define the Service first, then advertise a host for it.
 6. It executes the Tailscale CLI to advertise services and Funnels.
 7. If `DELETE_UNUSED_SERVICES` is enabled, it deletes tailnet service definitions that no host is registered for anymore.
-8. It periodically reconciles state so container IP changes are handled automatically.
+8. It periodically reconciles state so container IP changes are handled automatically. It also compares matching desired services with the local `AdvertiseServices` preferences and restores missing advertisements, including services left drained after interrupted cleanup; see [Cleanup Behavior](07-reference.md#cleanup-behavior).
 
 ### Networking Model
 

@@ -11,7 +11,7 @@ Use this section when checking exact configuration names, defaults, and supporte
 | `TAILSCALE_API_KEY` | - | API key alternative to OAuth. |
 | `TAILSCALE_TAILNET` | `-` | Tailnet ID. Defaults to the credential's tailnet. |
 | `DEFAULT_SERVICE_TAGS` | `tag:container` | Default tags for services whose containers set no `docktail.tags` label. Tags are reconciled on every cycle; manual tag edits in the admin console are overwritten. |
-| `IGNORE_SERVICE_NAMES` | - | Comma-separated service names DockTail must not drain, clear, or delete during reconciliation or shutdown cleanup. |
+| `IGNORE_SERVICE_NAMES` | - | Comma-separated service names DockTail must not drain, clear, delete, or restore missing advertisements for during reconciliation or shutdown cleanup. |
 | `DELETE_UNUSED_SERVICES` | `false` | When `true`, DockTail deletes tailnet Service definitions that no host advertises anymore. Requires API credentials. See [Cleanup Behavior](#cleanup-behavior). |
 | `SKIP_SHUTDOWN_CLEANUP` | `false` | When `true`, DockTail leaves its services and Funnels advertised on shutdown instead of draining and clearing them. This can keep ports exposed on the tailnet beyond what your current labels define; see [Cleanup Behavior](#cleanup-behavior). |
 | `LOG_LEVEL` | `info` | Logging level for all output, including the DockTail Cloud module: `debug`, `info`, `warn`, or `error`. Any other value means `info`. |
@@ -107,11 +107,25 @@ Funnel `docktail.funnel.protocol` values:
 
 ### Cleanup Behavior
 
-DockTail cleans up the services and Funnels it advertises locally when it shuts down (draining then clearing them). This is the safe default: when DockTail is not running, nothing it configured stays reachable, so the advertised surface can never drift from what your labels describe.
+DockTail attempts to clean up the services and Funnels it advertises locally when it shuts down, reducing stale exposure while it is not running. Service cleanup runs serially, once per service name even when it has several ports: drain first, then clear. Draining stops new connections; DockTail clears the configuration immediately afterward without waiting for all existing connections to finish.
+
+Cleanup has a 30-second budget. The Compose examples set `stop_grace_period: 40s` so Docker does not cut that budget short with its default 10-second stop timeout:
+
+```yaml
+services:
+  docktail:
+    stop_grace_period: 40s
+```
+
+For `docker run`, set `--stop-timeout 40`; for an explicit stop, use `docker stop --timeout 40 docktail`. Configure the equivalent timeout in container update tools, which may override the container's timeout. Cleanup stops scheduling commands when its budget expires. A longer Docker grace period allows cleanup time to finish but cannot guarantee completion: a crash, SIGKILL, daemon error, or the cleanup deadline can leave some services configured or advertised.
+
+On startup and every reconciliation cycle, DockTail also reads `tailscale debug prefs`. If a desired service has matching Serve configuration but is missing from `AdvertiseServices`, DockTail restores its advertisement with `tailscale serve advertise` after syncing its control-plane definition (when API sync is enabled). This repairs services left drained but configured after interrupted cleanup without rewriting their endpoints. It uses the same local daemon socket as Serve, requires no additional API credentials, and runs once per service name. Ignored services and service names with endpoint conflicts are excluded from this repair. Failed, malformed, or unsupported prefs reads are treated as unknown state: DockTail skips advertisement repair for that cycle while continuing normal configuration reconciliation.
+
+A manual `tailscale serve drain` of a desired, matching service is therefore reversed on the next successful reconciliation. Stop the backing container, remove its service labels, or exclude the service from advertisement repair with `IGNORE_SERVICE_NAMES` if the drain should persist. Local configuration and advertisement do not guarantee that Tailscale has propagated peer routes or that the service is reachable.
 
 `SKIP_SHUTDOWN_CLEANUP=true` disables this cleanup. DockTail then leaves its services and Funnels advertised when it exits instead of tearing them down. It affects only graceful shutdown; a hard crash never runs cleanup either way.
 
-> **Warning:** Enabling this keeps ports exposed on the tailnet while DockTail is down, potentially beyond what your current labels define. The serve and Funnel configuration lives in `tailscaled`, not in DockTail, so anything DockTail last advertised keeps serving on the host until DockTail comes back. If you stop a container, remove it, or delete its DockTail labels while DockTail is not running, that service (and any Funnel) stays reachable for the entire downtime and is only reconciled away once DockTail restarts. The default cleanup exists precisely to prevent this stale exposure. Only enable `SKIP_SHUTDOWN_CLEANUP` if keeping services reachable across DockTail restarts is worth giving up that guarantee, and treat the advertised surface as detached from your labels until DockTail is running again.
+> **Warning:** Enabling this keeps ports exposed on the tailnet while DockTail is down, potentially beyond what your current labels define. The serve and Funnel configuration lives in `tailscaled`, not in DockTail, so anything DockTail last advertised keeps serving on the host until DockTail comes back. If you stop a container, remove it, or delete its DockTail labels while DockTail is not running, that service (and any Funnel) stays reachable for the entire downtime and is only reconciled away once DockTail restarts. Only enable `SKIP_SHUTDOWN_CLEANUP` if keeping services reachable across DockTail restarts is worth deliberately skipping cleanup, and treat the advertised surface as detached from your labels until DockTail is running again.
 
 On restart, DockTail re-adopts the still-advertised services and removes only those whose containers are no longer running. Ignored services (`IGNORE_SERVICE_NAMES`) are never cleaned up regardless of this setting.
 

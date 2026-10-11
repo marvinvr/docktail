@@ -209,10 +209,22 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		Int("current_service_count", len(currentServices)).
 		Msg("Retrieved current service state from Tailscale")
 
+	// A drained service can retain its matching Serve configuration. Read prefs
+	// once per cycle so that interrupted cleanup and other advertisement drift
+	// are repaired without rewriting otherwise healthy endpoints.
+	var advertisedServices map[string]struct{}
+	if serviceDesiredCount > 0 {
+		advertisedServices, err = c.getAdvertisedServices(ctx)
+		if err != nil {
+			log.Warn().Err(err).Msg("Advertisement state is unknown; skipping advertisement drift repair this cycle")
+		}
+	}
+
 	// Track what we need to add and remove
 	toAdd := make(map[string]*apptypes.ContainerService)
 	toRemove := make(map[string]ServiceEndpoint)
 	pathsToRemove := make(map[string]ServiceEndpoint)
+	toAdvertise := make(map[string]struct{})
 
 	// Find services to add (in desired but not in current, or changed)
 	for key, desired := range desiredMap {
@@ -244,7 +256,16 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 					Int("expected_proxy_protocol", desired.ProxyProtocol).
 					Msg("Service configuration changed, will update")
 			} else {
-				// Service exists and matches - no action needed
+				// Only restore known-missing advertisements for matching endpoints.
+				// Advertising affects every port of a service, so freeze conflicted
+				// names, including their non-conflicting sibling ports.
+				name := current.ServiceName
+				_, conflicted := conflictedNames[normalizeServiceName(name)]
+				if advertisedServices != nil && !conflicted && !c.shouldIgnoreService(name) {
+					if _, advertised := advertisedServices[name]; !advertised {
+						toAdvertise[name] = struct{}{}
+					}
+				}
 				log.Debug().
 					Str("key", key).
 					Str("service", desired.ServiceName).
@@ -275,9 +296,19 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		}
 	}
 
+	// Config changes advertise through addService. Removals clear whole services.
+	// Neither may be followed by a repair based on the old Serve snapshot.
+	for _, svc := range toAdd {
+		delete(toAdvertise, "svc:"+svc.ServiceName)
+	}
+	for _, svc := range toRemove {
+		delete(toAdvertise, svc.ServiceName)
+	}
+
 	log.Info().
 		Int("to_add", len(toAdd)).
 		Int("to_remove", len(toRemove)).
+		Int("to_advertise", len(toAdvertise)).
 		Msg("Calculated reconciliation actions")
 
 	// Remove old services first
@@ -365,14 +396,37 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 		}
 	}
 
+	advertiseFailCount := 0
+	advertisedCount := 0
+	advertiseNames := make([]string, 0, len(toAdvertise))
+	for name := range toAdvertise {
+		advertiseNames = append(advertiseNames, name)
+	}
+	sort.Strings(advertiseNames)
+	// Keep these writes serial: Tailscale's CLI edits the shared prefs list.
+	for _, name := range advertiseNames {
+		log.Info().Str("service", name).Msg("Restoring missing service advertisement")
+		if err := c.advertiseService(ctx, name); err != nil {
+			advertiseFailCount++
+			log.Error().Err(err).Str("service", name).Msg("Failed to restore service advertisement")
+		} else {
+			advertisedCount++
+		}
+	}
+
 	log.Info().
 		Int("added", successCount).
 		Int("failed", failCount).
 		Int("removed", len(toRemove)).
+		Int("advertised", advertisedCount).
+		Int("advertise_failed", advertiseFailCount).
 		Msg("Service reconciliation completed")
 
 	if failCount > 0 {
 		return fmt.Errorf("failed to add %d services", failCount)
+	}
+	if advertiseFailCount > 0 {
+		return fmt.Errorf("failed to advertise %d services", advertiseFailCount)
 	}
 
 	// Reconcile funnel configuration (independent of serve)
@@ -928,6 +982,9 @@ func (c *Client) deleteUnusedServiceDefinitions(ctx context.Context, desiredServ
 // CleanupAllServices removes all services and funnels managed by DockTail
 // This is called on shutdown to ensure no orphaned services remain advertised
 func (c *Client) CleanupAllServices(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	log.Info().Msg("Starting cleanup: removing all managed Tailscale services and funnels")
 
 	var totalErrors []error
@@ -960,6 +1017,9 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 				Strs("unmanaged_public_ports", unmanagedFunnels).
 				Msg("Skipping funnel cleanup because unmanaged funnels exist on this node")
 		} else {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			if err := c.resetFunnels(ctx, "cleanup"); err != nil {
 				log.Error().Err(err).Msg("Failed to clean up funnels")
 				totalErrors = append(totalErrors, err)
@@ -971,6 +1031,9 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 	}
 
 	// Cleanup services
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	currentServices, err := c.GetCurrentServices(ctx)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to get current services for cleanup")
@@ -989,11 +1052,21 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 		Int("service_count", len(currentServices)).
 		Msg("Found services to clean up")
 
-	// Remove each service (drain + clear)
+	// Remove each service name once (drain + clear), even with several ports.
+	// Keep writes serial: each CLI call edits shared prefs and Serve config.
 	successCount := 0
 	failCount := 0
+	cleanedNames := make(map[string]struct{})
 
 	for _, svc := range currentServices {
+		if err := ctx.Err(); err != nil {
+			log.Warn().Err(err).Msg("Stopping cleanup: context expired")
+			return err
+		}
+		if _, seen := cleanedNames[svc.ServiceName]; seen {
+			continue
+		}
+		cleanedNames[svc.ServiceName] = struct{}{}
 		if c.shouldIgnoreService(svc.ServiceName) {
 			log.Info().
 				Str("service", svc.ServiceName).
@@ -1009,6 +1082,9 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 			Msg("Cleaning up service")
 
 		if err := c.removeService(ctx, svc.ServiceName); err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			failCount++
 			log.Error().
 				Err(err).

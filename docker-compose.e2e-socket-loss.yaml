@@ -37,6 +37,7 @@ services:
     restart: "no"
 
   docktail:
+    stop_grace_period: 40s
     build: .
     container_name: e2e-sl-docktail
     # No depends_on: DockTail is expected to tolerate starting before the daemon,

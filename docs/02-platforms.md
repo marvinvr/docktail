@@ -25,6 +25,7 @@ systemctl --user enable --now podman.socket
 services:
   docktail:
     image: ghcr.io/marvinvr/docktail:latest
+    stop_grace_period: 40s
     restart: unless-stopped
     volumes:
       - /run/podman/podman.sock:/var/run/docker.sock:ro   # or /run/user/1000/podman/podman.sock
@@ -110,6 +111,7 @@ services:
 
   docktail:
     image: ghcr.io/marvinvr/docktail:latest
+    stop_grace_period: 40s
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - tailscale-socket:/var/run/tailscale

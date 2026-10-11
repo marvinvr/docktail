@@ -52,6 +52,7 @@ DockTail uses native Tailscale Services, not per-container Tailscale devices.
 services:
   docktail:
     image: ghcr.io/marvinvr/docktail:latest
+    stop_grace_period: 40s
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro

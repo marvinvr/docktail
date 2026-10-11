@@ -6,11 +6,53 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/rs/zerolog/log"
 
 	apptypes "github.com/marvinvr/docktail/types"
 )
+
+// getAdvertisedServices reads local advertisement state independently of Serve
+// configuration. Errors mean unknown state; never include the prefs payload or
+// CLI output in errors, because prefs can contain private node information.
+func (c *Client) getAdvertisedServices(ctx context.Context) (map[string]struct{}, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	output, err := c.tailscaleCmd(ctx, "debug", "prefs").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read advertised services: %w", err)
+	}
+	var prefs struct {
+		AdvertiseServices json.RawMessage
+	}
+	if err := json.Unmarshal([]byte(stripWarnings(output)), &prefs); err != nil {
+		return nil, fmt.Errorf("failed to parse prefs JSON: %w", err)
+	}
+	if len(prefs.AdvertiseServices) == 0 {
+		return nil, errors.New("prefs JSON is missing AdvertiseServices")
+	}
+	var names []string
+	if err := json.Unmarshal(prefs.AdvertiseServices, &names); err != nil {
+		return nil, fmt.Errorf("failed to parse AdvertiseServices: %w", err)
+	}
+	advertised := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		advertised[name] = struct{}{}
+	}
+	return advertised, nil
+}
+
+func (c *Client) advertiseService(ctx context.Context, serviceName string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	output, err := c.tailscaleCmd(ctx, "serve", "advertise", serviceName).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to advertise service %s: %w (output: %s)", serviceName, err, output)
+	}
+	return nil
+}
 
 // GetCurrentServices retrieves the current Tailscale service status using CLI
 func (c *Client) GetCurrentServices(ctx context.Context) (map[string]ServiceEndpoint, error) {
@@ -350,6 +392,10 @@ func (c *Client) removeService(ctx context.Context, serviceName string) error {
 		Str("service", serviceName).
 		Msg("Gracefully removing service: draining then clearing")
 
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	// Step 1: Drain the service to gracefully close existing connections
 	// This is important for security - prevents stale services from staying accessible
 	drainCmd := c.tailscaleCmd(ctx, "serve", "drain", serviceName)
@@ -360,6 +406,9 @@ func (c *Client) removeService(ctx context.Context, serviceName string) error {
 		Msg("Draining service to close existing connections")
 
 	drainOutput, drainErr := drainCmd.CombinedOutput()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if drainErr != nil {
 		stderr := string(drainOutput)
 		// Only warn if drain fails - we'll still try to clear
@@ -381,6 +430,9 @@ func (c *Client) removeService(ctx context.Context, serviceName string) error {
 	}
 
 	// Step 2: Clear the service configuration
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	clearCmd := c.tailscaleCmd(ctx, "serve", "clear", serviceName)
 
 	log.Debug().
