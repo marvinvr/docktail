@@ -904,10 +904,12 @@ fi
 # Docker labels or the backend, so only periodic reconciliation can repair it.
 
 test_advertisement_drift_recovery() {
-    local name="svc:e2e-proto-http"
+    local name="svc:e2e-proto-tcp"
     local config_before config_after prefs cycles_before cycles_after
     local elapsed=0 timeout="$((RECONCILE_WAIT * 3))"
     local recovered=0
+    local drift_since
+    drift_since=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
     refresh_serve_status
     config_before=$(echo "$SERVE_STATUS_CACHE" | jq -cS --arg name "$name" '.Services[$name] // empty')
@@ -959,6 +961,9 @@ test_advertisement_drift_recovery() {
         elapsed=$((elapsed + 1))
     done
     cycles_after=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -c 'Service reconciliation completed' || true)
+    echo "  DockTail reconciliation evidence during drift recovery:"
+    docker logs --since "$drift_since" "$DOCKTAIL_CONTAINER" 2>&1 \
+        | grep -E "Calculated reconciliation actions|Service reconciliation completed|service=$name([[:space:]]|$)" || true
     refresh_serve_status
     config_after=$(echo "$SERVE_STATUS_CACHE" | jq -cS --arg name "$name" '.Services[$name] // empty')
     if [ "$config_before" != "$config_after" ]; then
