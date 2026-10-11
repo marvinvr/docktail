@@ -895,6 +895,87 @@ else
 fi
 
 # ==============================================================================
+# 12a. Advertisement Drift Recovery (issue #104)
+# ==============================================================================
+#
+# Reproduce interrupted drain-before-clear cleanup without depending on SIGKILL
+# timing: freeze DockTail, drain a running service, and verify its configuration
+# survives while its advertisement is absent. Resume DockTail without changing
+# Docker labels or the backend, so only periodic reconciliation can repair it.
+
+test_advertisement_drift_recovery() {
+    local name="svc:e2e-proto-http"
+    local config_before config_after prefs cycles_before cycles_after
+    local elapsed=0 timeout="$((RECONCILE_WAIT * 3))"
+    local recovered=0
+
+    refresh_serve_status
+    config_before=$(echo "$SERVE_STATUS_CACHE" | jq -cS --arg name "$name" '.Services[$name] // empty')
+    if [ -z "$config_before" ]; then
+        fail "issue #104 precondition: $name must be configured"
+        return
+    fi
+    if ! docker exec "$TS_CONTAINER" tailscale debug prefs 2>/dev/null \
+        | jq -e --arg name "$name" '(.AdvertiseServices // []) | index($name) != null' >/dev/null; then
+        fail "issue #104 precondition: $name must initially be advertised"
+        return
+    fi
+    if ! docker pause "$DOCKTAIL_CONTAINER" >/dev/null; then
+        fail "issue #104 setup: could not pause DockTail"
+        return
+    fi
+    cycles_before=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -c 'Service reconciliation completed' || true)
+    if ! docker exec "$TS_CONTAINER" tailscale serve drain "$name"; then
+        docker unpause "$DOCKTAIL_CONTAINER" >/dev/null
+        fail "issue #104 setup: could not drain $name"
+        return
+    fi
+    if ! prefs=$(docker exec "$TS_CONTAINER" tailscale debug prefs 2>/dev/null); then
+        docker unpause "$DOCKTAIL_CONTAINER" >/dev/null
+        fail "issue #104 setup: could not read advertisement state after drain"
+        return
+    fi
+    refresh_serve_status
+    config_after=$(echo "$SERVE_STATUS_CACHE" | jq -cS --arg name "$name" '.Services[$name] // empty')
+    if [ "$config_before" != "$config_after" ] || ! echo "$prefs" \
+        | jq -e --arg name "$name" '(.AdvertiseServices | type == "array") and (.AdvertiseServices | index($name) == null)' >/dev/null; then
+        docker unpause "$DOCKTAIL_CONTAINER" >/dev/null
+        fail "issue #104 setup: drain must leave $name configured but unadvertised"
+        return
+    fi
+    pass "issue #104 reproduced: $name is configured but unadvertised"
+    if ! docker unpause "$DOCKTAIL_CONTAINER" >/dev/null; then
+        fail "issue #104 setup: could not resume DockTail"
+        return
+    fi
+
+    while [ "$elapsed" -lt "$timeout" ]; do
+        if docker exec "$TS_CONTAINER" tailscale debug prefs 2>/dev/null \
+            | jq -e --arg name "$name" '(.AdvertiseServices // []) | index($name) != null' >/dev/null; then
+            recovered=1
+            break
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    cycles_after=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -c 'Service reconciliation completed' || true)
+    refresh_serve_status
+    config_after=$(echo "$SERVE_STATUS_CACHE" | jq -cS --arg name "$name" '.Services[$name] // empty')
+    if [ "$config_before" != "$config_after" ]; then
+        fail "issue #104: $name serve configuration changed during advertisement recovery"
+    elif [ "$recovered" = "1" ]; then
+        pass "issue #104: $name re-advertised within ${elapsed}s with unchanged serve configuration"
+    elif [ "$cycles_after" -gt "$cycles_before" ]; then
+        fail "issue #104: $name still configured but unadvertised after $((cycles_after - cycles_before)) completed reconcile cycle(s) (${timeout}s)"
+    else
+        fail "issue #104: no reconcile completed within ${timeout}s; recovery could not be assessed"
+    fi
+}
+
+log "12a. Advertisement Drift Recovery (issue #104)"
+test_advertisement_drift_recovery
+
+# ==============================================================================
 # 13. Control Plane Cleanup of Unused Services (DELETE_UNUSED_SERVICES=true)
 # ==============================================================================
 #
@@ -1232,91 +1313,10 @@ assert_service_destination_is "e2e-proto-http" "$owner_destination"
 assert_service_path         "e2e-proto-http" "/api"
 
 # ==============================================================================
-# 18. Advertisement Drift Recovery (issue #104)
-# ==============================================================================
-#
-# Reproduce interrupted drain-before-clear cleanup without depending on SIGKILL
-# timing: freeze DockTail, drain a running service, and verify its configuration
-# survives while its advertisement is absent. Resume DockTail without changing
-# Docker labels or the backend, so only periodic reconciliation can repair it.
-
-test_advertisement_drift_recovery() {
-    local name="svc:e2e-proto-http"
-    local config_before config_after prefs cycles_before cycles_after
-    local elapsed=0 timeout="$((RECONCILE_WAIT * 3))"
-    local recovered=0
-
-    refresh_serve_status
-    config_before=$(echo "$SERVE_STATUS_CACHE" | jq -cS --arg name "$name" '.Services[$name] // empty')
-    if [ -z "$config_before" ]; then
-        fail "issue #104 precondition: $name must be configured"
-        return
-    fi
-    if ! docker exec "$TS_CONTAINER" tailscale debug prefs 2>/dev/null \
-        | jq -e --arg name "$name" '(.AdvertiseServices // []) | index($name) != null' >/dev/null; then
-        fail "issue #104 precondition: $name must initially be advertised"
-        return
-    fi
-    if ! docker pause "$DOCKTAIL_CONTAINER" >/dev/null; then
-        fail "issue #104 setup: could not pause DockTail"
-        return
-    fi
-    cycles_before=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -c 'Service reconciliation completed' || true)
-    if ! docker exec "$TS_CONTAINER" tailscale serve drain "$name"; then
-        docker unpause "$DOCKTAIL_CONTAINER" >/dev/null
-        fail "issue #104 setup: could not drain $name"
-        return
-    fi
-    if ! prefs=$(docker exec "$TS_CONTAINER" tailscale debug prefs 2>/dev/null); then
-        docker unpause "$DOCKTAIL_CONTAINER" >/dev/null
-        fail "issue #104 setup: could not read advertisement state after drain"
-        return
-    fi
-    refresh_serve_status
-    config_after=$(echo "$SERVE_STATUS_CACHE" | jq -cS --arg name "$name" '.Services[$name] // empty')
-    if [ "$config_before" != "$config_after" ] || ! echo "$prefs" \
-        | jq -e --arg name "$name" '(.AdvertiseServices | type == "array") and (.AdvertiseServices | index($name) == null)' >/dev/null; then
-        docker unpause "$DOCKTAIL_CONTAINER" >/dev/null
-        fail "issue #104 setup: drain must leave $name configured but unadvertised"
-        return
-    fi
-    pass "issue #104 reproduced: $name is configured but unadvertised"
-    if ! docker unpause "$DOCKTAIL_CONTAINER" >/dev/null; then
-        fail "issue #104 setup: could not resume DockTail"
-        return
-    fi
-
-    while [ "$elapsed" -lt "$timeout" ]; do
-        if docker exec "$TS_CONTAINER" tailscale debug prefs 2>/dev/null \
-            | jq -e --arg name "$name" '(.AdvertiseServices // []) | index($name) != null' >/dev/null; then
-            recovered=1
-            break
-        fi
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-    cycles_after=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep -c 'Service reconciliation completed' || true)
-    refresh_serve_status
-    config_after=$(echo "$SERVE_STATUS_CACHE" | jq -cS --arg name "$name" '.Services[$name] // empty')
-    if [ "$config_before" != "$config_after" ]; then
-        fail "issue #104: $name serve configuration changed during advertisement recovery"
-    elif [ "$recovered" = "1" ]; then
-        pass "issue #104: $name re-advertised within ${elapsed}s with unchanged serve configuration"
-    elif [ "$cycles_after" -gt "$cycles_before" ]; then
-        fail "issue #104: $name still configured but unadvertised after $((cycles_after - cycles_before)) completed reconcile cycle(s) (${timeout}s)"
-    else
-        fail "issue #104: no reconcile completed within ${timeout}s; recovery could not be assessed"
-    fi
-}
-
-log "18. Advertisement Drift Recovery (issue #104)"
-test_advertisement_drift_recovery
-
-# ==============================================================================
-# 19. Log Health
+# 18. Log Health
 # ==============================================================================
 
-log "19. DockTail Log Health"
+log "18. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if grep -qE "FATAL|panic" <<<"$docktail_logs"; then
