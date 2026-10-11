@@ -263,8 +263,8 @@ func main() {
 
 	log.Info().Msg("Reconciler stopped, cleaning up Tailscale services")
 
-	// Use a new context with timeout for cleanup (don't use cancelled context)
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Use a fresh context and leave headroom within Docker's default 10-second stop timeout.
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cleanupCancel()
 
 	if err := tailscaleClient.CleanupAllServices(cleanupCtx); err != nil {

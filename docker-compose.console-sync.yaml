@@ -8,7 +8,6 @@
 
 services:
   docktail:
-    stop_grace_period: 40s
     build: .
     container_name: docktail-test
     restart: unless-stopped

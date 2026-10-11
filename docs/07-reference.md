@@ -109,15 +109,7 @@ Funnel `docktail.funnel.protocol` values:
 
 DockTail attempts to clean up the services and Funnels it advertises locally when it shuts down, reducing stale exposure while it is not running. Service cleanup runs serially, once per service name even when it has several ports: drain first, then clear. Draining stops new connections; DockTail clears the configuration immediately afterward without waiting for all existing connections to finish.
 
-Cleanup has a 30-second budget. The Compose examples set `stop_grace_period: 40s` so Docker does not cut that budget short with its default 10-second stop timeout:
-
-```yaml
-services:
-  docktail:
-    stop_grace_period: 40s
-```
-
-For `docker run`, set `--stop-timeout 40`; for an explicit stop, use `docker stop --timeout 40 docktail`. Configure the equivalent timeout in container update tools, which may override the container's timeout. Cleanup stops scheduling commands when its budget expires. A longer Docker grace period allows cleanup time to finish but cannot guarantee completion: a crash, SIGKILL, daemon error, or the cleanup deadline can leave some services configured or advertised.
+Cleanup has an 8-second budget, leaving headroom within Docker’s default 10-second stop timeout. Cleanup stops scheduling commands when its budget expires. A crash, SIGKILL, daemon error, or the cleanup deadline can leave some services configured or advertised; reconciliation repairs missing advertisements when DockTail resumes.
 
 On startup and every reconciliation cycle, DockTail also reads `tailscale debug prefs`. If a desired service has matching Serve configuration but is missing from `AdvertiseServices`, DockTail restores its advertisement with `tailscale serve advertise` after syncing its control-plane definition (when API sync is enabled). This repairs services left drained but configured after interrupted cleanup without rewriting their endpoints. It uses the same local daemon socket as Serve, requires no additional API credentials, and runs once per service name. Ignored services and service names with endpoint conflicts are excluded from this repair. Failed, malformed, or unsupported prefs reads are treated as unknown state: DockTail skips advertisement repair for that cycle while continuing normal configuration reconciliation.
 

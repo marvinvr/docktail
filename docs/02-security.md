@@ -31,7 +31,6 @@ services:
 
   docktail:
     image: ghcr.io/marvinvr/docktail:latest
-    stop_grace_period: 40s
     restart: unless-stopped
     depends_on:
       - docker-socket-proxy
@@ -62,7 +61,6 @@ The image runs DockTail as root. It needs no Linux capabilities for its own work
 services:
   docktail:
     image: ghcr.io/marvinvr/docktail:latest
-    stop_grace_period: 40s
     cap_drop:
       - ALL
     security_opt:

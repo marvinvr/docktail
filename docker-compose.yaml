@@ -13,7 +13,6 @@
 
 services:
   docktail:
-    stop_grace_period: 40s
     image: ghcr.io/marvinvr/docktail:latest
     container_name: docktail
     # Required: DockTail exits on purpose when it loses the Tailscale socket and
