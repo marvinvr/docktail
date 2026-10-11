@@ -13,6 +13,9 @@ services:
       - TS_SOCKET=/var/run/tailscale/tailscaled.sock
       - TS_USERSPACE=false
       - TS_EXTRA_ARGS=--advertise-tags=tag:ci-test
+      # Match a host-installed daemon: containerboot's automatic advertisement
+      # would otherwise repair #104 independently and mask DockTail regressions.
+      - TS_EXPERIMENTAL_SERVICE_AUTO_ADVERTISEMENT=false
     volumes:
       - ts-state:/var/lib/tailscale
       - ts-socket:/var/run/tailscale
