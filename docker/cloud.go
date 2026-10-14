@@ -537,6 +537,34 @@ func (c *Client) ContainerStats(ctx context.Context, containerID string) (Contai
 	}, nil
 }
 
+// RunningContainersMemory sums the working set (see memUsageNoCache) of every
+// running container on this engine. Inside a Proxmox LXC this is the closest
+// reading of the CT's memory use the agent can get: its own /proc and cgroup are
+// the node's and its own container's, but every container here is charged to the
+// CT. It misses only the CT's non-container processes (dockerd, systemd, sshd).
+// A container that exits between the list and its stats call is skipped; an
+// error is returned only when the list fails or no container could be sampled.
+func (c *Client) RunningContainersMemory(ctx context.Context) (int64, error) {
+	containers, err := c.cli.ContainerList(ctx, container.ListOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("failed to list containers: %w", err)
+	}
+	var sum int64
+	sampled := 0
+	for _, cont := range containers {
+		s, err := c.ContainerStats(ctx, cont.ID)
+		if err != nil {
+			continue
+		}
+		sum += s.MemUsageBytes
+		sampled++
+	}
+	if len(containers) > 0 && sampled == 0 {
+		return 0, fmt.Errorf("no running container could be sampled")
+	}
+	return sum, nil
+}
+
 // memUsageNoCache returns the container's working set — total memory usage minus
 // the inactive file cache — matching what `docker stats` shows. The cache key
 // differs between cgroup v1 (total_inactive_file) and v2 (inactive_file); falls

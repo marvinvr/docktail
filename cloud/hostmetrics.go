@@ -17,7 +17,9 @@ import (
 // are the HOST's — they are not namespaced (that is exactly what LXCFS exists to
 // fake), so the agent reads true whole-host CPU/memory/load with no extra
 // mounts. On Docker Desktop these reflect the LinuxKit VM; /sys temperature
-// sensors exist only on bare metal. Every read is best-effort: a missing or
+// sensors exist only on bare metal. Inside a Proxmox LXC /proc is the physical
+// node's, so the collector swaps in the CT's memory (memNodeScoped) and drops
+// the node's loadavg. Every read is best-effort: a missing or
 // unreadable source yields "unknown", never an error that stops reporting.
 // Package vars (not consts) so they can be redirected in tests.
 var (
@@ -265,6 +267,34 @@ func readMemInfo() memInfo {
 		swapTotalBytes: vals["SwapTotal"] * kib,
 		swapUsedBytes:  swapUsed * kib,
 	}
+}
+
+// memNodeScoped reports whether this /proc/meminfo describes a bigger machine
+// than the docker engine does. Docker reads MemTotal from its own /proc/meminfo,
+// which on bare metal, in a VM and under Docker Desktop is the same file the
+// agent reads, so the two match exactly. Inside a Proxmox LXC dockerd sees the
+// CT's limit through LXCFS while the agent's freshly mounted /proc is the
+// physical node's; mixing the node's used with the CT's total is what reads as
+// a near-full CT. The 2% margin only absorbs a balloon resize between the reads.
+func memNodeScoped(dockerTotalBytes int64) bool {
+	if dockerTotalBytes <= 0 {
+		return false
+	}
+	return readMemInfo().totalBytes-dockerTotalBytes > dockerTotalBytes/50
+}
+
+// ctScopedMemory replaces the node's memory and swap in m with the CT's: total
+// is the CT's limit as docker reports it, used the summed working set of its
+// containers. The node's swap says nothing about the CT's, which isn't readable
+// from here, so it is cleared. ok=false (containers unreadable) leaves memory
+// unknown rather than fall back to the node's figures.
+func ctScopedMemory(m *proto.HostMetrics, totalBytes, usedBytes int64, ok bool) {
+	m.SwapTotalBytes, m.SwapUsedBytes = 0, 0
+	if !ok || totalBytes <= 0 {
+		m.MemTotalBytes, m.MemUsedBytes = 0, 0
+		return
+	}
+	m.MemTotalBytes, m.MemUsedBytes = totalBytes, usedBytes
 }
 
 // parseMeminfoLine parses a line like "MemTotal:       16331156 kB" into its key

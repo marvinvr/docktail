@@ -83,6 +83,7 @@ type Collector struct {
 	hostTempCap    bool               // temperature sensors detected → advertise host_temp
 	hostDiskCap    bool               // filesystems enumerable here → advertise host_disk
 	loadNodeScoped bool               // /proc loadavg is the physical node's, not this CT's → don't report it
+	memNodeScoped  bool               // /proc/meminfo is the physical node's, not this CT's → report the CT's from docker
 
 	createdAt time.Time   // when the collector was built; the link has been "connecting" since
 	link      linkTracker // connection state for the local health status (link.go)
@@ -152,6 +153,13 @@ func NewCollector(ctx context.Context, cfg Config, dc *docker.Client, ts tailnet
 	// CT's own load isn't readable from inside the nested container.
 	if specs.CPUCores > 0 && physicalCPUCount() > specs.CPUCores {
 		c.loadNodeScoped = true
+	}
+	// The same LXC gap applies to memory: /proc/meminfo is the node's, while
+	// docker's MemTotal is the CT's limit (via LXCFS). Report the CT's memory from
+	// docker instead (see ctScopedMemory) so total and used share one scope.
+	if memNodeScoped(specs.MemTotalBytes) {
+		c.memNodeScoped = true
+		logger.Info().Msg("cloud: /proc/meminfo is the node's, not this container host's (LXC); reporting memory from docker")
 	}
 	return c, nil
 }
@@ -961,18 +969,18 @@ func (c *Collector) heartbeatLoop(ctx context.Context, conn *wsConn) {
 func (c *Collector) metricsLoop(ctx context.Context, conn *wsConn) {
 	ticker := time.NewTicker(proto.HeartbeatInterval * time.Second)
 	defer ticker.Stop()
-	c.sampleAndSendMetrics(conn)
+	c.sampleAndSendMetrics(ctx, conn)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			c.sampleAndSendMetrics(conn)
+			c.sampleAndSendMetrics(ctx, conn)
 		}
 	}
 }
 
-func (c *Collector) sampleAndSendMetrics(conn *wsConn) {
+func (c *Collector) sampleAndSendMetrics(ctx context.Context, conn *wsConn) {
 	// Always sample so the CPU-delta baseline stays fresh even while unmonitored;
 	// only the send is gated (the cloud drops host_metrics for unmonitored hosts),
 	// so the first sample after a promotion isn't averaged over the whole gap.
@@ -987,6 +995,13 @@ func (c *Collector) sampleAndSendMetrics(conn *wsConn) {
 	c.mu.RUnlock()
 	if unmonitored {
 		return
+	}
+	if c.memNodeScoped {
+		used, err := c.docker.RunningContainersMemory(ctx)
+		if err != nil {
+			c.log.Debug().Err(err).Msg("cloud: CT memory sample failed")
+		}
+		ctScopedMemory(&m, c.specs.MemTotalBytes, used, err == nil)
 	}
 	c.send(conn, proto.TypeHostMetrics, m)
 }
