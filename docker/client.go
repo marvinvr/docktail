@@ -54,6 +54,12 @@ type Client struct {
 	// own network IP (see sharesNetworkWith). Resolved at most once.
 	selfNetOnce sync.Once
 	selfNetIDs  map[string]struct{}
+
+	// netNames caches network ID -> network name, used by the swarm discovery
+	// path to resolve the operator's DOCKTAIL_SWARM_NETWORK preference. Network
+	// names do not change under a running cluster, and the lookup is otherwise
+	// repeated for every candidate VIP on every reconcile.
+	netNames sync.Map
 }
 
 // NewClient creates a new Docker client
@@ -792,9 +798,7 @@ func (c *Client) parseContainer(ctx context.Context, containerID string, labels 
 }
 
 func (c *Client) parseContainerServices(ctx context.Context, containerID string, labels map[string]string) ([]*apptypes.ContainerService, error) {
-	serviceEnabled := isServiceEnabled(labels)
-	funnelEnabled := isFunnelEnabled(labels)
-	if !serviceEnabled && !funnelEnabled {
+	if !isManagedContainer(labels) {
 		return nil, nil
 	}
 
@@ -802,6 +806,21 @@ func (c *Client) parseContainerServices(ctx context.Context, containerID string,
 	inspect, err := c.cli.ContainerInspect(ctx, containerID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect container: %w", err)
+	}
+
+	return c.parseFromInspect(ctx, containerID, inspect, labels)
+}
+
+// parseFromInspect runs the label -> service translation against an already
+// resolved inspect response. Keeping it separate from parseContainerServices
+// lets the swarm source (docker/swarm.go) reuse the whole label surface for
+// Swarm services, whose "container" is a service VIP rather than a locally
+// inspectable container.
+func (c *Client) parseFromInspect(ctx context.Context, containerID string, inspect container.InspectResponse, labels map[string]string) ([]*apptypes.ContainerService, error) {
+	serviceEnabled := isServiceEnabled(labels)
+	funnelEnabled := isFunnelEnabled(labels)
+	if !serviceEnabled && !funnelEnabled {
+		return nil, nil
 	}
 
 	containerName := strings.TrimPrefix(inspect.Name, "/")
