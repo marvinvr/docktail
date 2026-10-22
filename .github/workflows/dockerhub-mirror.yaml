@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       update-description:
-        description: Push README.md as the Docker Hub description
+        description: Push the Docker Hub overview, short description and categories
         required: false
         type: boolean
         default: false
@@ -24,7 +24,7 @@ on:
         required: true
         type: string
       update-description:
-        description: Push README.md of the selected branch as the Docker Hub description
+        description: Push the Docker Hub overview, short description and categories
         required: false
         type: boolean
         default: true
@@ -75,18 +75,11 @@ jobs:
         with:
           persist-credentials: false
 
-      # The action only completes Markdown links; the README header uses HTML
-      # <img> tags, so those are made absolute here. Markdown links and images
-      # are handled by enable-url-completion and point at the same ref.
-      - name: Prepare README for Docker Hub
-        if: inputs.update-description
-        run: |
-          RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/"
-          sed -i -E "s#(<img[^>]* src=\")([^\":]+\")#\1${RAW}\2#g" README.md
-
-      # Writing the description needs a token with read/write/delete scope.
-      # A token that can only push images fails here; the images are already
-      # published at this point, so this step is not allowed to fail the run.
+      # Writing the overview needs a token with read/write/delete scope. A
+      # token that can only push images fails here; the images are already
+      # published at this point, so neither step is allowed to fail the run.
+      # .github/dockerhub/README.md is the Docker Hub overview: the GitHub
+      # README trimmed for Hub, with absolute links only.
       - name: Update Docker Hub description
         if: inputs.update-description
         continue-on-error: true
@@ -96,5 +89,21 @@ jobs:
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
           repository: ${{ env.DOCKERHUB_REPOSITORY }}
           short-description: Unleash your containers as Tailscale Services
-          readme-filepath: README.md
-          enable-url-completion: true
+          readme-filepath: .github/dockerhub/README.md
+
+      - name: Update Docker Hub categories
+        if: inputs.update-description
+        continue-on-error: true
+        env:
+          DOCKER_HUB_TOKEN: ${{ secrets.DOCKER_HUB_TOKEN }}
+          CATEGORIES: '[{"name":"Networking","slug":"networking"},{"name":"Developer tools","slug":"developer-tools"}]'
+        run: |
+          JWT=$(jq -n --arg u "$DOCKERHUB_USERNAME" --arg s "$DOCKER_HUB_TOKEN" '{identifier: $u, secret: $s}' \
+            | curl -fsS -X POST https://hub.docker.com/v2/auth/token -H 'Content-Type: application/json' -d @- \
+            | jq -r .access_token)
+          echo "::add-mask::$JWT"
+          STATUS=$(curl -sS -o response.json -w '%{http_code}' -X PATCH \
+            "https://hub.docker.com/v2/repositories/$DOCKERHUB_REPOSITORY/categories" \
+            -H "Authorization: Bearer $JWT" -H 'Content-Type: application/json' -d "$CATEGORIES")
+          echo "HTTP $STATUS"; cat response.json; echo
+          [[ "$STATUS" == 2* ]]
