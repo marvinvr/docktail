@@ -885,16 +885,21 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (accepted bool, re
 
 	runDone := make(chan error, 1)
 	go func() { runDone <- conn.run(connCtx, h) }()
+	// awaitRun waits for the read loop to exit on the paths that abandon the
+	// connection before it was accepted. Its error is dropped on purpose: the
+	// caller already knows why the connection is going away (cancelled, failed
+	// hello, rejected, timed out), and whatever run returns is only the fallout.
+	awaitRun := func() { <-runDone } //nolint:errcheck // error is fallout of a teardown the caller chose
 
 	if !c.sendHello(connCtx, conn) {
 		connCancel()
-		<-runDone
+		awaitRun()
 		return false, nil
 	}
 
 	select {
 	case <-connCtx.Done():
-		<-runDone
+		awaitRun()
 		return false, nil
 	case err := <-runDone:
 		if err != nil {
@@ -905,14 +910,14 @@ func (c *Collector) session(ctx context.Context, bo *backoff) (accepted bool, re
 		if !ack.Accepted {
 			r := helloRejection(ack.Reason)
 			connCancel()
-			<-runDone
+			awaitRun()
 			return false, &r
 		}
 		c.log.Info().Str("host_id", ack.HostID).Int("config_version", ack.ConfigVersion).Msg("cloud: connected and accepted")
 	case <-time.After(15 * time.Second):
 		c.log.Warn().Msg("cloud: timed out waiting for hello_ack")
 		connCancel()
-		<-runDone
+		awaitRun()
 		return false, nil
 	}
 

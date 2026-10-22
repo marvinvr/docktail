@@ -51,6 +51,9 @@ jobs:
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v7
+        with:
+          # Pinned: "latest" let a new linter release fail main without a code change.
+          version: v2.15.0
 
   docker:
     runs-on: ${{ matrix.runner }}
