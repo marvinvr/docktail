@@ -105,6 +105,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      tags: ${{ steps.tag-names.outputs.tags }}
+      prerelease: ${{ steps.release-type.outputs.prerelease }}
 
     steps:
       - name: Log in to Container Registry
@@ -147,3 +150,22 @@ jobs:
               $TAG-arm64 \
               $TAG-armv7
           done
+
+      - name: Collect tag names for Docker Hub
+        id: tag-names
+        run: |
+          TAGS="${{ steps.meta.outputs.tags }}"
+          echo "tags=$(echo "$TAGS" | sed 's/^.*://' | xargs)" >> $GITHUB_OUTPUT
+
+  # Runs only after the ghcr manifests exist and copies them, so a Docker Hub
+  # outage or a bad token never holds back the ghcr release.
+  dockerhub:
+    needs: manifest
+    permissions:
+      contents: read
+      packages: read
+    uses: ./.github/workflows/dockerhub-mirror.yaml
+    with:
+      tags: ${{ needs.manifest.outputs.tags }}
+      update-description: ${{ needs.manifest.outputs.prerelease == 'false' }}
+    secrets: inherit

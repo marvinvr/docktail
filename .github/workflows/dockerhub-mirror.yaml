@@ -1,0 +1,100 @@
+name: Mirror to Docker Hub
+
+# Copies already published ghcr.io images to docker.io/marvinvr/docktail. The
+# multi-arch manifest lists are copied as they are (all platforms, same digest),
+# nothing is rebuilt. docker-build.yaml calls this after its manifest job, so a
+# Docker Hub failure can never hold back the ghcr images. Run it by hand to
+# backfill tags that already exist on ghcr, e.g. "1.8.5 1.8 1 latest".
+on:
+  workflow_call:
+    inputs:
+      tags:
+        description: Space-separated ghcr tags to copy
+        required: true
+        type: string
+      update-description:
+        description: Push README.md as the Docker Hub description
+        required: false
+        type: boolean
+        default: false
+  workflow_dispatch:
+    inputs:
+      tags:
+        description: Space-separated ghcr tags to copy (e.g. "1.8.5 1.8 1 latest")
+        required: true
+        type: string
+      update-description:
+        description: Push README.md of the selected branch as the Docker Hub description
+        required: false
+        type: boolean
+        default: true
+
+env:
+  SOURCE_IMAGE: ghcr.io/marvinvr/docktail
+  DOCKERHUB_USERNAME: marvinvr
+  DOCKERHUB_REPOSITORY: marvinvr/docktail
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+
+      - name: Copy tags
+        env:
+          TAGS: ${{ inputs.tags }}
+        run: |
+          for TAG in $TAGS; do
+            echo "Copying $SOURCE_IMAGE:$TAG to docker.io/$DOCKERHUB_REPOSITORY:$TAG"
+            docker buildx imagetools create \
+              -t "docker.io/$DOCKERHUB_REPOSITORY:$TAG" \
+              "$SOURCE_IMAGE:$TAG"
+          done
+
+      - name: Checkout repository
+        if: inputs.update-description
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # The action only completes Markdown links; the README header uses HTML
+      # <img> tags, so those are made absolute here. Markdown links and images
+      # are handled by enable-url-completion and point at the same ref.
+      - name: Prepare README for Docker Hub
+        if: inputs.update-description
+        run: |
+          RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/"
+          sed -i -E "s#(<img[^>]* src=\")([^\":]+\")#\1${RAW}\2#g" README.md
+
+      # Writing the description needs a token with read/write/delete scope.
+      # A token that can only push images fails here; the images are already
+      # published at this point, so this step is not allowed to fail the run.
+      - name: Update Docker Hub description
+        if: inputs.update-description
+        continue-on-error: true
+        uses: peter-evans/dockerhub-description@v5
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKER_HUB_TOKEN }}
+          repository: ${{ env.DOCKERHUB_REPOSITORY }}
+          short-description: Unleash your containers as Tailscale Services
+          readme-filepath: README.md
+          enable-url-completion: true

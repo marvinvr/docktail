@@ -109,7 +109,7 @@ The sidecar uses `network_mode: host` so it can reach container IPs on any Docke
 
 ### Platforms And Release Binaries
 
-The image `ghcr.io/marvinvr/docktail` is published for `linux/amd64`, `linux/arm64` and `linux/arm/v7` (Raspberry Pi 2/3 and older 32-bit ARM NAS devices). Docker picks the right one automatically; the setups above work unchanged on all three.
+The image `ghcr.io/marvinvr/docktail` is published for `linux/amd64`, `linux/arm64` and `linux/arm/v7` (Raspberry Pi 2/3 and older 32-bit ARM NAS devices). Docker picks the right one automatically; the setups above work unchanged on all three. The same tags are mirrored to Docker Hub as `marvinvr/docktail` if you prefer pulling from there.
 
 [GitHub releases](https://github.com/marvinvr/docktail/releases) newer than 1.8.3 also carry static Linux binaries for the same three architectures (`docktail_<version>_linux_amd64.tar.gz`, `…_linux_arm64.tar.gz`, `…_linux_armv7.tar.gz`) plus a `checksums.txt`. Use them to run DockTail directly on a Linux host instead of in a container:
 
