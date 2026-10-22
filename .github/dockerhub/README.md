@@ -2,14 +2,11 @@
 
 **Unleash your containers as Tailscale Services.**
 
-[![Latest release](https://img.shields.io/github/v/release/marvinvr/docktail?label=release)](https://github.com/marvinvr/docktail/releases/latest)
-[![License: AGPL-3.0](https://img.shields.io/github/license/marvinvr/docktail)](https://github.com/marvinvr/docktail/blob/main/LICENSE)
-[![GitHub](https://img.shields.io/github/stars/marvinvr/docktail?logo=github&label=GitHub)](https://github.com/marvinvr/docktail)
-[![Docs](https://img.shields.io/badge/docs-docktail.org-blue)](https://docktail.org/docs/)
+[![Latest release](https://img.shields.io/github/v/release/marvinvr/docktail?label=release)](https://github.com/marvinvr/docktail/releases/latest) [![License: AGPL-3.0](https://img.shields.io/github/license/marvinvr/docktail)](https://github.com/marvinvr/docktail/blob/main/LICENSE) [![GitHub](https://img.shields.io/github/stars/marvinvr/docktail?logo=github&label=GitHub)](https://github.com/marvinvr/docktail) [![Docs](https://img.shields.io/badge/docs-docktail.org-blue)](https://docktail.org/docs/)
 
-![DockTail](https://raw.githubusercontent.com/marvinvr/docktail/main/assets/header.jpeg)
+![Add docktail labels to a Compose service, run docker compose up -d, and open http://myapp.your-tailnet.ts.net](https://raw.githubusercontent.com/marvinvr/docktail/main/assets/demo.gif)
 
-![Add docktail labels to a Compose service, run docker compose up -d, and open https://myapp.your-tailnet.ts.net](https://raw.githubusercontent.com/marvinvr/docktail/main/assets/demo.gif)
+[![Featured on Tailscale Community](https://raw.githubusercontent.com/marvinvr/docktail/main/assets/tailscale-community-badge.svg)](https://tailscale.com/community/community-projects/docktail)
 
 DockTail watches Docker containers, reads `docktail.*` labels, and exposes matching containers as native [Tailscale Services](https://tailscale.com/kb/1552/tailscale-services). App containers do not need published Docker ports; DockTail proxies directly to their Docker network IPs, and your apps do not each use up a Tailscale device slot.
 
