@@ -5,11 +5,32 @@ title: Quick Start: Expose a Docker Container on Tailscale | DockTail
 
 ## Quick Start
 
-Before you start, the Docker host needs:
+### Before you start
 
-1. **Tailscale, tagged.** The host is on your tailnet and advertises a tag such as `tag:server` (`sudo tailscale up --advertise-tags=tag:server --reset`). On macOS, Windows and many NAS devices, run Tailscale as a [sidecar](02-installation.md#tailscale-sidecar) instead.
-2. **An ACL that lets it advertise services.** `tag:server` and `tag:container` in `tagOwners`, and an `autoApprovers.services` rule; see [ACL Configuration](03-tailscale-admin.md#acl-configuration).
-3. **Tailscale OAuth credentials** (recommended), so DockTail creates the service definitions itself; see [OAuth Credentials](03-tailscale-admin.md#oauth-credentials). Without them, create each service in the Tailscale Admin Console by hand.
+- [ ] The Docker host is on your tailnet and tagged `tag:server` (`sudo tailscale up --advertise-tags=tag:server --reset`). On macOS, Windows and many NAS devices, use the [Tailscale sidecar](02-installation.md#tailscale-sidecar) instead.
+- [ ] Your tailnet policy lists `tag:server` and `tag:container` (the default service tag) in `tagOwners`, and `autoApprovers.services` lets `tag:server` advertise `tag:container` services. See [ACL Configuration](03-tailscale-admin.md#acl-configuration).
+- [ ] Recommended: a Tailscale OAuth client for `tag:server` with **Services: Write** and **Devices Core: Write** (plus **Keys Auth Keys: Write** for the sidecar). No broader scope, such as `all`, is needed. Without credentials, you create each service in the admin console yourself. See [OAuth Credentials](03-tailscale-admin.md#oauth-credentials).
+
+<details>
+<summary>Policy snippet (tagOwners + autoApprovers)</summary>
+
+```json
+{
+  "tagOwners": {
+    "tag:server": ["autogroup:admin"],
+    "tag:container": ["tag:server"]
+  },
+  "autoApprovers": {
+    "services": {
+      "tag:container": ["tag:server"]
+    }
+  }
+}
+```
+
+</details>
+
+### Run it
 
 Then add DockTail to your Docker Compose file alongside the service you want to expose:
 

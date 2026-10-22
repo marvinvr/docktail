@@ -2,6 +2,13 @@
 
 **Unleash your containers as Tailscale Services.**
 
+<p>
+  <a href="https://github.com/marvinvr/docktail/releases/latest"><img src="https://img.shields.io/github/v/release/marvinvr/docktail?label=release" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/marvinvr/docktail" alt="License: AGPL-3.0"></a>
+  <a href="https://github.com/marvinvr/docktail/pkgs/container/docktail"><img src="https://img.shields.io/badge/image-ghcr.io%2Fmarvinvr%2Fdocktail-blue?logo=docker&logoColor=white" alt="Image on ghcr.io"></a>
+  <a href="https://github.com/marvinvr/docktail/actions/workflows/ci.yaml"><img src="https://img.shields.io/github/actions/workflow/status/marvinvr/docktail/ci.yaml?branch=main&label=CI" alt="CI status"></a>
+</p>
+
 <p align="center">
   <img src="assets/header.jpeg" alt="DockTail Header" width="100%">
 </p>
@@ -10,6 +17,10 @@
   <a href="https://tailscale.com/community/community-projects/docktail">
     <img src="assets/tailscale-community-badge.svg" alt="Featured on Tailscale Community" height="54">
   </a>
+</p>
+
+<p align="center">
+  <img src="assets/demo.gif" alt="Add docktail labels to a Compose service, run docker compose up -d, and open https://myapp.your-tailnet.ts.net" width="100%">
 </p>
 
 DockTail watches Docker containers, reads `docktail.*` labels, and exposes matching containers as Tailscale Services. App containers do not need published Docker ports by default; DockTail proxies directly to their Docker network IPs.
@@ -45,6 +56,31 @@ DockTail uses native Tailscale Services, not per-container Tailscale devices.
 - Optional cleanup of unused Tailscale service definitions (opt-in, safe with multiple instances).
 - Stateless Docker container runtime.
 - Optional [DockTail Cloud](https://docktail.org/cloud/) reporting — multi-host monitoring, opt-in via one env var.
+
+## Before you start
+
+- [ ] The Docker host is on your tailnet and tagged `tag:server` (`sudo tailscale up --advertise-tags=tag:server --reset`). On macOS, Windows and many NAS devices, use the [Tailscale sidecar](docs/02-installation.md#tailscale-sidecar) instead.
+- [ ] Your tailnet policy lists `tag:server` and `tag:container` (the default service tag) in `tagOwners`, and `autoApprovers.services` lets `tag:server` advertise `tag:container` services.
+- [ ] Recommended: a Tailscale OAuth client for `tag:server` with **Services: Write** and **Devices Core: Write** (plus **Keys Auth Keys: Write** for the sidecar). No broader scope, such as `all`, is needed. Without credentials, you create each service in the admin console yourself. See [OAuth Credentials](docs/03-tailscale-admin.md#oauth-credentials).
+
+<details>
+<summary>Policy snippet (tagOwners + autoApprovers)</summary>
+
+```json
+{
+  "tagOwners": {
+    "tag:server": ["autogroup:admin"],
+    "tag:container": ["tag:server"]
+  },
+  "autoApprovers": {
+    "services": {
+      "tag:container": ["tag:server"]
+    }
+  }
+}
+```
+
+</details>
 
 ## Quick Start
 
