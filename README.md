@@ -10,17 +10,13 @@
 </p>
 
 <p align="center">
-  <img src="assets/header.jpeg" alt="DockTail Header" width="100%">
+  <img src="assets/demo.gif" alt="Add docktail labels to a Compose service, run docker compose up -d, and open http://myapp.your-tailnet.ts.net" width="100%">
 </p>
 
 <p align="center">
   <a href="https://tailscale.com/community/community-projects/docktail">
     <img src="assets/tailscale-community-badge.svg" alt="Featured on Tailscale Community" height="54">
   </a>
-</p>
-
-<p align="center">
-  <img src="assets/demo.gif" alt="Add docktail labels to a Compose service, run docker compose up -d, and open https://myapp.your-tailnet.ts.net" width="100%">
 </p>
 
 DockTail watches Docker containers, reads `docktail.*` labels, and exposes matching containers as Tailscale Services. App containers do not need published Docker ports by default; DockTail proxies directly to their Docker network IPs.
