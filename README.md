@@ -19,6 +19,10 @@
   </a>
 </p>
 
+DockTail watches Docker containers, reads `docktail.*` labels, and exposes matching containers as Tailscale Services. App containers do not need published Docker ports by default; DockTail proxies directly to their Docker network IPs.
+
+## Featured by Tailscale
+
 <p align="center">
   <a href="https://www.youtube.com/watch?v=qNw9aTHilos">
     <img src="assets/tailscale-video.jpg" alt="Watch &quot;I'm Running Docker Apps Differently Now&quot; on Tailscale's YouTube channel" width="480">
@@ -26,8 +30,6 @@
   <br>
   <sub>▶ <a href="https://www.youtube.com/watch?v=qNw9aTHilos"><b>I'm Running Docker Apps Differently Now</b></a>: DockTail, featured on Tailscale's YouTube channel</sub>
 </p>
-
-DockTail watches Docker containers, reads `docktail.*` labels, and exposes matching containers as Tailscale Services. App containers do not need published Docker ports by default; DockTail proxies directly to their Docker network IPs.
 
 ## Why DockTail?
 
