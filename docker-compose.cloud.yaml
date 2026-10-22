@@ -1,10 +1,10 @@
 # DockTail with DockTail Cloud reporting, on a Linux host that already runs
 # Tailscale. DockTail Cloud is a paid, hosted service:
-# https://docktail.org/cloud/ -- agent setup: https://docktail.org/docs/#docktail-cloud
+# https://docktail.org/cloud/ -- agent setup: https://docktail.org/docs/cloud/
 #
 # Before you start:
 #   1. DockTail works on this host without Cloud (host tagged, tailnet policy
-#      set up): https://docktail.org/docs/#tailscale-admin-setup
+#      set up): https://docktail.org/docs/tailscale-admin/
 #   2. Tailscale OAuth credentials (or an API key) are configured. Cloud's
 #      tailnet health check needs them; without them it reports "no Tailscale
 #      credentials" for this host instead.
