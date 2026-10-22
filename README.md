@@ -63,31 +63,6 @@ DockTail uses native Tailscale Services, not per-container Tailscale devices.
 - Stateless Docker container runtime.
 - Optional [DockTail Cloud](https://docktail.org/cloud/) reporting — multi-host monitoring, opt-in via one env var.
 
-## Before you start
-
-- [ ] The Docker host is on your tailnet and tagged `tag:server` (`sudo tailscale up --advertise-tags=tag:server --reset`). On macOS, Windows and many NAS devices, use the [Tailscale sidecar](docs/02-installation.md#tailscale-sidecar) instead.
-- [ ] Your tailnet policy lists `tag:server` and `tag:container` (the default service tag) in `tagOwners`, and `autoApprovers.services` lets `tag:server` advertise `tag:container` services.
-- [ ] Recommended: a Tailscale OAuth client for `tag:server` with **Services: Write** and **Devices Core: Write** (plus **Keys Auth Keys: Write** for the sidecar). No broader scope, such as `all`, is needed. Without credentials, you create each service in the admin console yourself. See [OAuth Credentials](docs/03-tailscale-admin.md#oauth-credentials).
-
-<details>
-<summary>Policy snippet (tagOwners + autoApprovers)</summary>
-
-```json
-{
-  "tagOwners": {
-    "tag:server": ["autogroup:admin"],
-    "tag:container": ["tag:server"]
-  },
-  "autoApprovers": {
-    "services": {
-      "tag:container": ["tag:server"]
-    }
-  }
-}
-```
-
-</details>
-
 ## Quick Start
 
 ```yaml
