@@ -1,3 +1,8 @@
+<!--
+description: Docker Compose examples for DockTail: HTTP and HTTPS services, SSH and databases over TCP, PROXY protocol, custom networks and public Funnel.
+title: DockTail Examples: Docker Compose Labels for Tailscale
+-->
+
 ## Examples
 
 These examples show the labels you add to application containers. They assume DockTail itself is already running on the same Docker host.

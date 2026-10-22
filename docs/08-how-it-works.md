@@ -1,3 +1,8 @@
+<!--
+description: How DockTail reconciles Docker containers with Tailscale Services: the event-driven loop, direct container IP proxying and host networking.
+title: How DockTail Works: Docker to Tailscale Reconciliation
+-->
+
 ## How It Works
 
 DockTail is a reconciliation loop between Docker and Tailscale.

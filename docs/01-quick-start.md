@@ -1,3 +1,8 @@
+<!--
+description: Expose a Docker container as a Tailscale Service in minutes: tag the host, add DockTail to Docker Compose and label the app container.
+title: Quick Start: Expose a Docker Container on Tailscale | DockTail
+-->
+
 ## Quick Start
 
 Before you start, the Docker host needs:

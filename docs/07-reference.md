@@ -1,3 +1,8 @@
+<!--
+description: DockTail reference: environment variables, supported protocols, cleanup behavior, Tailscale socket loss, version checks and the health check.
+title: DockTail Reference: Environment Variables and Behavior
+-->
+
 ## Reference
 
 Use this section when checking exact configuration names, defaults, and supported protocols.
@@ -55,7 +60,7 @@ Log lines are colored only when stdout is a terminal; setting `NO_COLOR` (to any
 
 #### DockTail Cloud (optional)
 
-These variables enable optional DockTail Cloud reporting. They are opt-in: the agent is completely inert unless `DOCKTAIL_CLOUD_KEY` is set. See [DockTail Cloud](#docktail-cloud).
+These variables enable optional DockTail Cloud reporting. They are opt-in: the agent is completely inert unless `DOCKTAIL_CLOUD_KEY` is set. See [DockTail Cloud](06-cloud.md).
 
 | Variable | Default | Description |
 | --- | --- | --- |

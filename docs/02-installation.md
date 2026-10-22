@@ -1,3 +1,8 @@
+<!--
+description: Install DockTail with Tailscale on the Linux host or as a Tailscale sidecar container, on rootless Docker, or as a static Linux binary.
+title: Install DockTail: Host Tailscale, Sidecar, Rootless Docker
+-->
+
 ## Installation
 
 DockTail needs access to the Docker socket and a Tailscale socket. Use the host setup when Tailscale already runs on a Linux Docker host. Use the sidecar setup when the host should not install Tailscale directly, or when the host's Tailscale daemon cannot be shared with containers (macOS and Windows). [Platform Guides](02-platforms.md#platform-guides) covers Podman, NAS systems, Swarm and Kubernetes, and [Hardening](02-security.md#hardening) narrows what DockTail can reach.

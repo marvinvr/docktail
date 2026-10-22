@@ -1,3 +1,8 @@
+<!--
+description: DockTail Cloud monitors DockTail hosts and services, tells a container problem from a Tailscale exposure problem, and exposes an MCP server and API.
+title: DockTail Cloud: Setup, Data Sent, Tailnet Health, API and MCP
+-->
+
 ## DockTail Cloud
 
 DockTail Cloud is optional, opt-in monitoring for DockTail-managed services across one or more hosts. It is a hosted dashboard that watches what DockTail exposes and tells you *why* something is unreachable.

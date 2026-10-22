@@ -1,3 +1,9 @@
+<!--
+description: Run DockTail on Podman, Synology, Unraid, TrueNAS SCALE, macOS, Windows, Docker Swarm and Kubernetes, and how well each is known to work.
+nav: Platforms
+title: DockTail on Podman, Synology, Unraid, TrueNAS, Swarm and Kubernetes
+-->
+
 ## Platform Guides
 
 DockTail has two hard requirements wherever it runs:

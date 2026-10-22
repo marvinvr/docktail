@@ -1,3 +1,8 @@
+<!--
+description: DockTail exposes Docker containers as native Tailscale Services from Docker labels. Docs for setup, labels, Funnel, examples and DockTail Cloud.
+title: DockTail Docs: Docker Containers as Tailscale Services
+-->
+
 # DockTail Documentation
 
 DockTail exposes Docker containers as Tailscale Services using label-based configuration. It watches Docker events, reads `docktail.*` labels, and advertises matching containers through the local Tailscale daemon.
@@ -92,13 +97,14 @@ DockTail uses native Tailscale Services, not per-container Tailscale devices.
 - Supports multiple Tailscale services from one container.
 - Reconciles state when containers restart and container IPs change.
 - Runs as a stateless Docker container.
-- Optionally reports to [DockTail Cloud](#docktail-cloud), a paid hosted service, for multi-host monitoring and alerting. Opt-in via one environment variable; inert when unset.
+- Optionally reports to [DockTail Cloud](06-cloud.md), a paid hosted service, for multi-host monitoring and alerting. Opt-in via one environment variable; inert when unset.
 
 ## Recommended Reading Order
 
-1. Start with [Quick Start](#quick-start) for a minimal Compose setup.
-2. Read [Installation](#installation) for host Tailscale and sidecar options, [Platform Guides](#platform-guides) for Podman, NAS systems, macOS, Windows, Swarm and Kubernetes, and [Hardening](#hardening) to narrow what DockTail can reach.
-3. Configure Tailscale permissions in [Tailscale Admin Setup](#tailscale-admin-setup).
-4. Use [Labels](#labels) and [Examples](#examples) when exposing real services.
-5. See [DockTail Cloud](#docktail-cloud) if you want monitoring and alerting across your hosts.
-6. Check [Reference](#reference) for all labels, environment variables, protocols, and behavior notes.
+1. Start with [Quick Start](01-quick-start.md) for a minimal Compose setup.
+2. Read [Installation](02-installation.md) for host Tailscale and sidecar options, [Platform Guides](02-platforms.md) for Podman, NAS systems, macOS, Windows, Swarm and Kubernetes, and [Hardening](02-security.md) to narrow what DockTail can reach.
+3. Configure Tailscale permissions in [Tailscale Admin Setup](03-tailscale-admin.md).
+4. Use [Labels](04-labels.md) and [Examples](05-examples.md) when exposing real services.
+5. See [DockTail Cloud](06-cloud.md) if you want monitoring and alerting across your hosts.
+6. Check [Reference](07-reference.md) for all labels, environment variables, protocols, and behavior notes, and [How It Works](08-how-it-works.md) for the reconciliation loop.
+7. Follow a [how-to guide](guides/README.md) for a complete setup of a specific app, such as Jellyfin or Home Assistant, or for moving over from TSDProxy.

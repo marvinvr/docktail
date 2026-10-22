@@ -1,3 +1,8 @@
+<!--
+description: Harden DockTail: what Docker socket access means, running it behind a read-only socket proxy, and dropping container privileges.
+title: Hardening DockTail: Docker Socket Proxy and Privileges
+-->
+
 ## Hardening
 
 DockTail needs two sockets, and both are powerful. This section says what they grant and how to narrow it. None of it is required, and none of it is covered by DockTail's automated tests; what DockTail needs is taken from its source.

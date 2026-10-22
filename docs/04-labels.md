@@ -1,3 +1,8 @@
+<!--
+description: Every DockTail Docker label: service name, ports, protocols, paths, PROXY protocol, multiple services per container, Funnel and Cloud labels.
+title: DockTail Docker Labels: Tailscale Services and Funnel
+-->
+
 ## Labels
 
 DockTail watches containers with `docktail.*` labels. Each labeled container can become a private Tailscale service, a public Funnel, or both. DockTail does not run your application containers; it only observes them and configures Tailscale.

@@ -22,9 +22,27 @@ Keep these aligned:
 `docs/*.md` is the *only* place this prose exists. The published site
 (docktail.org) is built from a **separate private repo**, `docktail-website`,
 which pins this repository as a git submodule and runs `tools/docsgen` at image
-build time to render `docs/index.html`, `docs.md`, `llms.txt`, `llms-full.txt`
-and `sitemap.xml`. Those are build outputs — never commit them here, and never
-copy documentation prose into that repo.
+build time to render one page per file under `docs/` (plus a Markdown copy of
+each), `docs.md`, `llms.txt`, `llms-full.txt` and `sitemap.xml`. Those are build
+outputs — never commit them here, and never copy documentation prose into that
+repo.
+
+How the files map to the site:
+
+- `docs/NN-name.md` renders to `/docs/name/`; the file that opens with `#`
+  (`00-overview.md`) is `/docs/`. The other files open with `##`, which becomes
+  the page's H1. Filenames are URLs: renaming one moves a page.
+- `docs/guides/NN-name.md` renders to `/docs/guides/name/`, and
+  `docs/guides/README.md` is the `/docs/guides/` index.
+- Link across files as `04-labels.md#funnel-labels` (from a guide,
+  `../04-labels.md#…`); `#anchor` alone only reaches a heading of the same
+  file. `docsgen` fails on a link to a missing file or heading.
+- An optional comment at the very top sets the page's metadata:
+  `<!--` / `description: …` / `nav: …` / `title: …` / `-->`. Give every page a
+  `description:`; without one the first paragraph is used.
+- The old one-page `/docs/#anchor` links (in released agents' log lines, too)
+  keep working through a redirect map `docsgen` builds from the headings, so
+  keep heading texts stable where you can.
 
 Because the submodule is pinned by commit, documentation changes merged here do
 not reach docktail.org until someone bumps the pin in `docktail-website`. That

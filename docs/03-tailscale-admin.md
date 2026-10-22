@@ -1,3 +1,9 @@
+<!--
+description: Set up the Tailscale side for DockTail: OAuth client or API key, ACL tagOwners and autoApprovers for services, the Funnel node attribute, and approvals.
+nav: Tailscale Admin
+title: Tailscale OAuth, ACLs and Funnel Setup for DockTail
+-->
+
 ## Tailscale Admin Setup
 
 DockTail can advertise services locally without Tailscale API credentials, but OAuth or API key credentials allow it to create service definitions automatically in the Tailscale Admin Console.
