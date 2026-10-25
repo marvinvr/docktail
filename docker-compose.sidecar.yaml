@@ -9,7 +9,7 @@
 
 services:
   tailscale:
-    image: tailscale/tailscale:latest
+    image: tailscale/tailscale:v1.104.2
     container_name: tailscale-sidecar
     hostname: docktail-host
     environment:

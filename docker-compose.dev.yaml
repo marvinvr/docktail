@@ -67,7 +67,7 @@ services:
 
   # Example: TCP service with direct mode
   test-tcp:
-    image: nginx:latest
+    image: nginx:1.31
     container_name: test-tcp
     restart: unless-stopped
     # No ports needed
@@ -79,7 +79,7 @@ services:
 
   # Example: Legacy mode (published ports) - opt out of direct mode
   test-legacy:
-    image: nginx:latest
+    image: nginx:1.31
     container_name: test-legacy
     restart: unless-stopped
     ports:
@@ -92,7 +92,7 @@ services:
 
   # Example: Custom Docker network
   test-custom-network:
-    image: nginx:latest
+    image: nginx:1.31
     container_name: test-custom-network
     restart: unless-stopped
     networks:
@@ -105,7 +105,7 @@ services:
 
   # Example: Host networking mode
   test-host-network:
-    image: nginx:latest
+    image: nginx:1.31
     container_name: test-host-network
     restart: unless-stopped
     network_mode: host

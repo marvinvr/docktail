@@ -28,12 +28,12 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GOARM=${TARGETVAR
     -o docktail .
 
 # Tailscale binary stage — ensures CLI version matches the sidecar daemon exactly
-FROM tailscale/tailscale:latest AS tailscale
+FROM tailscale/tailscale:v1.104.2 AS tailscale
 
 # Runtime stage. DockTail runs no tailscaled of its own; it only drives the
 # host's or sidecar's daemon through the tailscale CLI over the mounted socket,
 # so no packet-filtering tools are needed here.
-FROM alpine:latest
+FROM alpine:3.24.3
 
 RUN apk add --no-cache ca-certificates
 

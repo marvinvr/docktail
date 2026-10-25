@@ -23,7 +23,7 @@ services:
   # no NET_ADMIN).
   tailscale:
     profiles: ["sidecar"]
-    image: tailscale/tailscale:latest
+    image: tailscale/tailscale:v1.104.2
     container_name: e2e-sl-tailscale
     entrypoint:
       - "/usr/local/bin/tailscaled"

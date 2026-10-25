@@ -4,7 +4,7 @@ services:
   # ============================================================================
 
   tailscale:
-    image: tailscale/tailscale:latest
+    image: tailscale/tailscale:v1.104.2
     container_name: e2e-tailscale
     hostname: e2e-docktail
     environment:
@@ -58,7 +58,7 @@ services:
 
   # HTTP service with explicit config
   test-proto-http:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-proto-http
     restart: "no"
     labels:
@@ -72,7 +72,7 @@ services:
 
   # HTTPS service protocol
   test-proto-https:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-proto-https
     restart: "no"
     labels:
@@ -85,7 +85,7 @@ services:
 
   # TCP service protocol
   test-proto-tcp:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-proto-tcp
     restart: "no"
     labels:
@@ -98,7 +98,7 @@ services:
 
   # TLS-terminated TCP service protocol
   test-proto-tls-terminated-tcp:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-proto-tls-terminated-tcp
     restart: "no"
     labels:
@@ -111,7 +111,7 @@ services:
 
   # TCP service with PROXY protocol v2 (issue #77)
   test-proxy-protocol:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-proxy-protocol
     restart: "no"
     labels:
@@ -125,7 +125,7 @@ services:
 
   # HTTP + proxy-protocol must be rejected (service is not advertised)
   test-proxy-protocol-http:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-proxy-protocol-http
     restart: "no"
     labels:
@@ -136,7 +136,7 @@ services:
 
   # Indexed TCP service carries its own proxy-protocol independently
   test-proxy-protocol-indexed:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-proxy-protocol-indexed
     restart: "no"
     labels:
@@ -152,7 +152,7 @@ services:
 
   # Starts without PROXY protocol; later recreated with the label (issue #77)
   test-proxy-protocol-change:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-proxy-protocol-change
     restart: "no"
     labels:
@@ -169,7 +169,7 @@ services:
 
   # Minimal labels: only enable + name + port → should default to http/80
   test-default-minimal:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-default-minimal
     restart: "no"
     labels:
@@ -179,7 +179,7 @@ services:
 
   # Only service-port=443 set, no protocol → should default to https
   test-default-port443:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-default-port443
     restart: "no"
     labels:
@@ -190,7 +190,7 @@ services:
 
   # Only service-protocol=https set, no port → should default to port 443
   test-default-proto-https:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-default-proto-https
     restart: "no"
     labels:
@@ -201,7 +201,7 @@ services:
 
   # Backend protocol=tcp, no service port/protocol → should default to tcp/80
   test-default-tcp-backend:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-default-tcp-backend
     restart: "no"
     labels:
@@ -216,7 +216,7 @@ services:
 
   # Direct mode on custom Docker network
   test-net-custom:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-net-custom
     restart: "no"
     networks:
@@ -229,7 +229,7 @@ services:
 
   # Published ports mode (direct=false)
   test-net-published:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-net-published
     restart: "no"
     ports:
@@ -242,7 +242,7 @@ services:
 
   # Host networking mode
   test-net-host:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-net-host
     restart: "no"
     network_mode: host
@@ -253,7 +253,7 @@ services:
 
   # Container port 443, no protocol labels → backend should default to https, service to https/443
   test-default-target443:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-default-target443
     restart: "no"
     labels:
@@ -267,7 +267,7 @@ services:
 
   # Service + HTTPS funnel on port 443
   test-funnel:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-funnel
     restart: "no"
     labels:
@@ -280,7 +280,7 @@ services:
 
   # Second HTTPS funnel sharing port 443 at a different path
   test-funnel-path:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-funnel-path
     restart: "no"
     labels:
@@ -291,7 +291,7 @@ services:
 
   # Funnel-only container on port 8443
   test-funnel-only:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-funnel-only
     restart: "no"
     labels:
@@ -305,7 +305,7 @@ services:
 
   # Container with custom tags (overrides default)
   test-custom-tags:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-custom-tags
     restart: "no"
     labels:
@@ -320,7 +320,7 @@ services:
 
   # Container serving two separate Tailscale services (e.g., VPN gateway scenario)
   test-multiport:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-multiport
     restart: "no"
     labels:
@@ -336,7 +336,7 @@ services:
 
   # Container serving three separate Tailscale services, non-contiguous indices
   test-multiport-three:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-multiport-three
     restart: "no"
     labels:
@@ -359,7 +359,7 @@ services:
   # ============================================================================
 
   test-lifecycle:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-lifecycle
     restart: "no"
     labels:
@@ -372,7 +372,7 @@ services:
   # ============================================================================
 
   test-ignored:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-ignored
     restart: "no"
 
@@ -381,7 +381,7 @@ services:
   # ============================================================================
 
   test-update:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-update
     restart: "no"
     labels:
@@ -398,7 +398,7 @@ services:
   # Primary service with a description plus an indexed service with its own
   # description; both are synced to the Service definition's "comment" field.
   test-description:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: e2e-description
     restart: "no"
     labels:

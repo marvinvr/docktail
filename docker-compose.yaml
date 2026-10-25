@@ -29,7 +29,7 @@ services:
 
   # Example app. No published ports: DockTail proxies to the container IP.
   whoami:
-    image: traefik/whoami:latest
+    image: traefik/whoami:v1.12.0
     restart: unless-stopped
     labels:
       - "docktail.service.enable=true"

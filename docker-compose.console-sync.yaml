@@ -25,7 +25,7 @@ services:
       - TAILSCALE_OAUTH_CLIENT_SECRET=${TAILSCALE_OAUTH_CLIENT_SECRET}
 
   test-service:
-    image: nginx:alpine
+    image: nginx:1.31-alpine
     container_name: docktail-test-service
     ports:
       - "5386:80"
