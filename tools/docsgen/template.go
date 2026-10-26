@@ -287,29 +287,41 @@ var docsTemplate = template.Must(template.New("docs").Parse(`<!DOCTYPE html>
 </head>
 <body class="bg-gray-50 text-gray-900 font-mono min-h-screen">
 
-  <!-- Nav -->
+  <!-- Nav: mirrors the website's src/components/Nav.astro. The full site nav
+       needs ~820px, so it starts at lg; below that the bar keeps the GitHub
+       button and the rest moves to the top of the docs drawer. -->
   <nav class="sticky top-0 z-50 bg-white/95 backdrop-blur border-b border-gray-200">
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
-      <div class="flex items-center gap-3 sm:gap-5">
-        <button id="sidebar-toggle" class="lg:hidden text-gray-500 hover:text-gray-900 transition-colors" aria-label="Open documentation navigation">
+      <div class="flex items-center gap-3 lg:gap-5 min-w-0">
+        <button id="sidebar-toggle" class="lg:hidden shrink-0 text-gray-500 hover:text-gray-900 transition-colors" aria-label="Open documentation navigation">
           <svg class="w-5 h-5" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
         </button>
-        <a href="/" class="inline-flex items-center gap-2 text-lg font-bold tracking-tight text-gray-900">
+        <a href="/" class="shrink-0 inline-flex items-center gap-2 text-lg font-bold tracking-tight text-gray-900">
           <img src="/assets/docktail-logo-light.webp" width="28" height="28" alt="" class="h-7 w-7 object-contain">
           <span>docktail</span>
         </a>
-        <span class="text-gray-300">/</span>
-        <a href="/docs/" class="text-sm text-gray-500 hover:text-gray-900 transition-colors">docs</a>
+        <span class="max-[379px]:hidden shrink-0 text-gray-300">/</span>
+        <a href="/docs/" class="max-[379px]:hidden min-w-0 truncate text-sm text-gray-500 hover:text-gray-900 transition-colors">docs</a>
       </div>
-      <div class="flex items-center gap-4 sm:gap-6">
-        <a href="/docs/" aria-current="page" class="hidden sm:inline text-sm text-gray-900 transition-colors">docs</a>
-        <a href="/cloud/?utm_source=docktail_org&amp;utm_medium=docs_nav" class="hidden sm:inline text-sm text-gray-500 hover:text-gray-900 transition-colors">cloud</a>
-        <a href="https://github.com/marvinvr/docktail" aria-label="DockTail on GitHub" title="DockTail on GitHub" class="hidden sm:inline-flex items-center text-gray-500 hover:text-gray-900 transition-colors">
+      <div class="shrink-0 flex items-center gap-2 lg:gap-6">
+        <a href="/docs/" aria-current="page" class="hidden lg:inline text-sm text-gray-900 transition-colors">docs</a>
+        <a href="/cloud/?utm_source=docktail_org&amp;utm_medium=docs_nav" class="hidden lg:inline text-sm text-gray-500 hover:text-gray-900 transition-colors">cloud</a>
+        <a href="/cloud/agents/" class="hidden lg:inline text-sm text-gray-500 hover:text-gray-900 transition-colors">agents</a>
+        <a href="https://github.com/marvinvr/docktail" aria-label="DockTail on GitHub" title="DockTail on GitHub" class="hidden lg:inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 transition-colors">
           <svg class="w-[18px] h-[18px] shrink-0" aria-hidden="true" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          {{ if .GitHubStars }}<span aria-hidden="true">{{ .GitHubStars }}</span>{{ end }}
         </a>
+        <span class="hidden lg:inline text-gray-300" aria-hidden="true">/</span>
+        <a href="https://cloud.docktail.org/login?utm_source=docktail_org&amp;utm_medium=docs_nav_signin" class="hidden lg:inline text-sm text-gray-500 hover:text-gray-900 transition-colors">sign in</a>
         <a href="https://cloud.docktail.org/login?utm_source=docktail_org&amp;utm_medium=docs_nav"
-           class="inline-flex items-center px-3 py-1.5 text-sm bg-gray-900 text-white rounded hover:bg-gray-800 transition-colors">
-          Open DockTail Cloud
+           class="hidden lg:inline-flex items-center gap-2 whitespace-nowrap px-3 py-1.5 font-sans text-sm bg-gray-900 text-white rounded hover:bg-gray-800 transition-colors">
+          <svg class="w-4 h-4 shrink-0" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 18a4.5 4.5 0 01.38-9 5.5 5.5 0 0110.37 1.54A3.5 3.5 0 0118.5 18H7z"/></svg>
+          DockTail Cloud
+        </a>
+        <a href="https://github.com/marvinvr/docktail" aria-label="DockTail on GitHub"
+           class="lg:hidden inline-flex items-center gap-1.5 whitespace-nowrap px-2.5 py-1.5 text-sm text-gray-700 bg-white border border-gray-200 rounded hover:border-gray-300 hover:bg-gray-50 transition-colors">
+          <svg class="w-[18px] h-[18px] shrink-0" aria-hidden="true" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          {{ if .GitHubStars }}<span aria-hidden="true">{{ .GitHubStars }}</span>{{ end }}
         </a>
       </div>
     </div>
@@ -410,7 +422,21 @@ var docsTemplate = template.Must(template.New("docs").Parse(`<!DOCTYPE html>
 
   <!-- Mobile sidebar overlay -->
   <div id="sidebar-overlay" class="hidden fixed inset-0 z-40 bg-black/20 lg:hidden"></div>
-  <div id="sidebar-mobile" class="hidden fixed top-14 left-0 z-40 w-64 bg-white border-r border-gray-200 h-[calc(100vh-3.5rem)] overflow-y-auto py-6 px-2 lg:hidden"></div>
+  <div id="sidebar-mobile" class="hidden fixed top-14 left-0 z-40 w-64 bg-white border-r border-gray-200 h-[calc(100vh-3.5rem)] overflow-y-auto py-6 px-2 lg:hidden">
+    <!-- The site links the bar has no room for below lg; the docs nav is appended after them. -->
+    <div class="mb-5 pb-5 border-b border-gray-200 text-sm">
+      <a href="/cloud/?utm_source=docktail_org&amp;utm_medium=docs_nav_mobile" class="block px-3 py-1.5 rounded text-gray-500 hover:text-gray-900 transition-colors">cloud</a>
+      <a href="/cloud/agents/" class="block px-3 py-1.5 rounded text-gray-500 hover:text-gray-900 transition-colors">agents</a>
+      <a href="https://cloud.docktail.org/login?utm_source=docktail_org&amp;utm_medium=docs_nav_signin_mobile" class="block px-3 py-1.5 rounded text-gray-500 hover:text-gray-900 transition-colors">sign in</a>
+      <div class="px-3 pt-3">
+        <a href="https://cloud.docktail.org/login?utm_source=docktail_org&amp;utm_medium=docs_nav_mobile"
+           class="inline-flex items-center gap-2 whitespace-nowrap px-3 py-1.5 font-sans bg-gray-900 text-white rounded hover:bg-gray-800 transition-colors">
+          <svg class="w-4 h-4 shrink-0" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M7 18a4.5 4.5 0 01.38-9 5.5 5.5 0 0110.37 1.54A3.5 3.5 0 0118.5 18H7z"/></svg>
+          DockTail Cloud
+        </a>
+      </div>
+    </div>
+  </div>
   <div id="tooltip-portal" class="tooltip-portal" role="tooltip" hidden></div>
 
   <script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-core.min.js"></script>

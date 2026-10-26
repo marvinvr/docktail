@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"html/template"
+	"net/http"
 	"os"
 	"path"
 	"path/filepath"
@@ -107,6 +108,39 @@ type pageData struct {
 	JSONLD      template.JS
 	Redirects   template.JS
 	GeneratedAt string
+	GitHubStars string
+}
+
+// githubStars is the repository's star count for the header, formatted like the
+// website nav ("1.3k"), fetched once per run. It is only as fresh as the last
+// render; when GitHub is unreachable or rate limits the build, the header falls
+// back to the bare GitHub mark rather than failing the build.
+func githubStars() string {
+	req, err := http.NewRequest(http.MethodGet, "https://api.github.com/repos/marvinvr/docktail", nil)
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "docktail-docsgen")
+	res, err := (&http.Client{Timeout: 4 * time.Second}).Do(req)
+	if err != nil {
+		return ""
+	}
+	defer res.Body.Close() //nolint:errcheck // read-only response body
+	if res.StatusCode != http.StatusOK {
+		return ""
+	}
+	var repo struct {
+		Stars *int `json:"stargazers_count"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&repo); err != nil || repo.Stars == nil {
+		return ""
+	}
+	n := *repo.Stars
+	if n < 1000 {
+		return fmt.Sprint(n)
+	}
+	return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1000), ".0") + "k"
 }
 
 func main() {
@@ -132,6 +166,7 @@ func main() {
 	}
 
 	generatedAt := time.Now().UTC().Format("2006-01-02")
+	stars := githubStars()
 	for i, p := range pages {
 		html, err := renderPage(p, bySource)
 		if err != nil {
@@ -148,6 +183,7 @@ func main() {
 			Groups:      buildNav(pages, p),
 			JSONLD:      jsonLD(p, generatedAt),
 			GeneratedAt: generatedAt,
+			GitHubStars: stars,
 		}
 		if i > 0 {
 			data.Prev = &navLink{Text: pages[i-1].NavTitle, URL: pages[i-1].URL()}
