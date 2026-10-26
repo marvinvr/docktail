@@ -88,7 +88,7 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKER_HUB_TOKEN }}
           repository: ${{ env.DOCKERHUB_REPOSITORY }}
-          short-description: Unleash your containers as Tailscale Services
+          short-description: Label-based Tailscale Services for Docker containers
           readme-filepath: .github/dockerhub/README.md
 
       - name: Update Docker Hub categories

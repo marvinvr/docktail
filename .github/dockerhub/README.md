@@ -1,6 +1,6 @@
 # 🍸 DockTail
 
-**Unleash your containers as Tailscale Services.**
+**Label-based Tailscale Services for Docker containers.**
 
 [![Latest release](https://img.shields.io/github/v/release/marvinvr/docktail?label=release)](https://github.com/marvinvr/docktail/releases/latest) [![License: AGPL-3.0](https://img.shields.io/github/license/marvinvr/docktail)](https://github.com/marvinvr/docktail/blob/main/LICENSE) [![GitHub](https://img.shields.io/github/stars/marvinvr/docktail?logo=github&label=GitHub)](https://github.com/marvinvr/docktail) [![Docs](https://img.shields.io/badge/docs-docktail.org-blue)](https://docktail.org/docs/)
 
