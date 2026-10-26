@@ -284,8 +284,9 @@ func memNodeScoped(dockerTotalBytes int64) bool {
 }
 
 // ctScopedMemory replaces the node's memory and swap in m with the CT's: total
-// is the CT's limit as docker reports it, used the summed working set of its
-// containers. The node's swap says nothing about the CT's, which isn't readable
+// is the CT's limit as docker reports it, used the summed container usage with
+// all file cache excluded (falling back to working sets if unavailable).
+// The node's swap says nothing about the CT's, which isn't readable
 // from here, so it is cleared. ok=false (containers unreadable) leaves memory
 // unknown rather than fall back to the node's figures.
 func ctScopedMemory(m *proto.HostMetrics, totalBytes, usedBytes int64, ok bool) {

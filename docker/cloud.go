@@ -505,6 +505,8 @@ type ContainerStatsSample struct {
 	OnlineCPUs     uint64 // CPUs available, for percentage normalization
 	MemUsageBytes  int64  // working set: usage minus inactive file cache
 	MemLimitBytes  int64  // effective limit: container limit, else host total
+
+	memUsageWithoutFileCache int64 // CT host memory: usage minus all file cache
 }
 
 // ContainerStats reads a single (non-streaming) docker stats sample for a
@@ -529,17 +531,20 @@ func (c *Client) ContainerStats(ctx context.Context, containerID string) (Contai
 		onlineCPUs = uint64(len(v.CPUStats.CPUUsage.PercpuUsage))
 	}
 	return ContainerStatsSample{
-		CPUTotalUsage:  v.CPUStats.CPUUsage.TotalUsage,
-		CPUSystemUsage: v.CPUStats.SystemUsage,
-		OnlineCPUs:     onlineCPUs,
-		MemUsageBytes:  memUsageNoCache(v.MemoryStats),
-		MemLimitBytes:  saturatingInt64(v.MemoryStats.Limit),
+		CPUTotalUsage:            v.CPUStats.CPUUsage.TotalUsage,
+		CPUSystemUsage:           v.CPUStats.SystemUsage,
+		OnlineCPUs:               onlineCPUs,
+		MemUsageBytes:            memUsageNoCache(v.MemoryStats),
+		MemLimitBytes:            saturatingInt64(v.MemoryStats.Limit),
+		memUsageWithoutFileCache: memUsageWithoutFileCache(v.MemoryStats),
 	}, nil
 }
 
-// RunningContainersMemory sums the working set (see memUsageNoCache) of every
-// running container on this engine. Inside a Proxmox LXC this is the closest
-// reading of the CT's memory use the agent can get: its own /proc and cgroup are
+// RunningContainersMemory sums memory usage excluding all file cache (falling
+// back to the working set) of every running container on this engine. Active
+// page cache must also be excluded so nightly reads don't look like CT memory
+// pressure. Inside a Proxmox LXC this is the closest reading of the CT's memory
+// use the agent can get: its own /proc and cgroup are
 // the node's and its own container's, but every container here is charged to the
 // CT. It misses only the CT's non-container processes (dockerd, systemd, sshd).
 // A container that exits between the list and its stats call is skipped; an
@@ -556,13 +561,28 @@ func (c *Client) RunningContainersMemory(ctx context.Context) (int64, error) {
 		if err != nil {
 			continue
 		}
-		sum += s.MemUsageBytes
+		sum += s.memUsageWithoutFileCache
 		sampled++
 	}
 	if len(containers) > 0 && sampled == 0 {
 		return 0, fmt.Errorf("no running container could be sampled")
 	}
 	return sum, nil
+}
+
+// memUsageWithoutFileCache excludes active and inactive file cache for CT host
+// memory accounting. If full cache stats are unavailable, retain the working
+// set calculation used for individual containers.
+func memUsageWithoutFileCache(mem container.MemoryStats) int64 {
+	for _, key := range []string{"file", "total_cache"} { // cgroup v2, v1
+		if cache, ok := mem.Stats[key]; ok {
+			if cache >= mem.Usage {
+				return 0
+			}
+			return saturatingInt64(mem.Usage - cache)
+		}
+	}
+	return memUsageNoCache(mem)
 }
 
 // memUsageNoCache returns the container's working set — total memory usage minus
