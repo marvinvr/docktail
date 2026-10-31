@@ -33,7 +33,7 @@ FROM tailscale/tailscale:v1.104.2 AS tailscale
 # Runtime stage. DockTail runs no tailscaled of its own; it only drives the
 # host's or sidecar's daemon through the tailscale CLI over the mounted socket,
 # so no packet-filtering tools are needed here.
-FROM alpine:3.24.3
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 RUN apk add --no-cache ca-certificates
 
