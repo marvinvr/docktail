@@ -1,7 +1,7 @@
 # Build stage. Runs on the build machine's own platform and cross-compiles for
 # the target (CGO is off), so a multi-arch build only emulates the small
 # runtime stage instead of the whole Go toolchain.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG VERSION=dev
 ARG TARGETOS
