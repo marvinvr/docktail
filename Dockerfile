@@ -1,7 +1,7 @@
 # Build stage. Runs on the build machine's own platform and cross-compiles for
 # the target (CGO is off), so a multi-arch build only emulates the small
 # runtime stage instead of the whole Go toolchain.
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 ARG VERSION=dev
 ARG TARGETOS
@@ -33,7 +33,7 @@ FROM tailscale/tailscale:v1.104.2 AS tailscale
 # Runtime stage. DockTail runs no tailscaled of its own; it only drives the
 # host's or sidecar's daemon through the tailscale CLI over the mounted socket,
 # so no packet-filtering tools are needed here.
-FROM alpine:3.24.3
+FROM alpine:3.24.3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 RUN apk add --no-cache ca-certificates
 

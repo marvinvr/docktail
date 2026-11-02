@@ -23,7 +23,7 @@
 
 services:
   docktail:
-    image: ghcr.io/marvinvr/docktail:latest
+    image: ghcr.io/marvinvr/docktail:latest@sha256:a9d68198e97a9e0a90255ac3bf04390543bb3b387fc91344f07e2187409377e4
     container_name: docktail
     # Required: DockTail exits on purpose when it loses the Tailscale socket and
     # relies on the restart policy to come back with a fresh mount.
@@ -43,7 +43,7 @@ services:
 
   # Example app. No published ports: DockTail proxies to the container IP.
   whoami:
-    image: traefik/whoami:v1.12.0
+    image: traefik/whoami:v1.12.0@sha256:c4717a8d1f0134a7444e24f881160e033991f23027c6c5a9a3f8fd22e70d1d44
     restart: unless-stopped
     labels:
       - "docktail.service.enable=true"

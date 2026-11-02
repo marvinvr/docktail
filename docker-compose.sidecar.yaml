@@ -34,7 +34,7 @@ services:
       retries: 30
 
   docktail:
-    image: ghcr.io/marvinvr/docktail:latest
+    image: ghcr.io/marvinvr/docktail:latest@sha256:a9d68198e97a9e0a90255ac3bf04390543bb3b387fc91344f07e2187409377e4
     container_name: docktail
     depends_on:
       tailscale:
