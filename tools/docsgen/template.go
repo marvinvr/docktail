@@ -283,6 +283,12 @@ var docsTemplate = template.Must(template.New("docs").Parse(`<!DOCTYPE html>
     }
     .doc blockquote p { margin: 0; }
     .doc blockquote p + p { margin-top: 0.5rem; }
+
+    /* DockTail Cloud box at the end of setup pages and guides */
+    .doc .cloud-box p { margin: 0; }
+    .doc .cloud-box p + p { margin-top: 0.25rem; }
+    .doc .cloud-box p.cloud-box-title { color: #111827; }
+    .doc .cloud-box p.cloud-box-link { margin-top: 0.75rem; }
   </style>
 </head>
 <body class="bg-gray-50 text-gray-900 font-mono min-h-screen">
@@ -360,6 +366,14 @@ var docsTemplate = template.Must(template.New("docs").Parse(`<!DOCTYPE html>
       <!-- Content -->
       <main class="doc flex-1 min-w-0 py-8 lg:py-12 max-w-3xl">
         {{ .Body }}
+
+        {{ if .CloudBox }}
+        <aside class="cloud-box mt-12 rounded-md border border-gray-200 bg-white p-4 text-sm text-gray-500">
+          <p class="cloud-box-title font-semibold text-gray-900">Stop checking if it's still up.</p>
+          <p>DockTail Cloud adds health checks, incidents and email alerts for every service DockTail publishes.</p>
+          <p class="cloud-box-link"><a href="/cloud/" data-rybbit-event="cta_click" data-rybbit-prop-placement="docs_cloud_box" data-rybbit-prop-to="cloud_landing" class="text-gray-900 underline underline-offset-2 hover:text-gray-600">Learn more about DockTail Cloud</a></p>
+        </aside>
+        {{ end }}
 
         {{ if or .Prev .Next }}
         <nav class="mt-16 grid gap-4 sm:grid-cols-2" aria-label="Previous and next page">

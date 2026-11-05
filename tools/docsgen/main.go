@@ -109,6 +109,7 @@ type pageData struct {
 	Redirects   template.JS
 	GeneratedAt string
 	GitHubStars string
+	CloudBox    bool
 }
 
 // githubStars is the repository's star count for the header, formatted like the
@@ -141,6 +142,23 @@ func githubStars() string {
 		return fmt.Sprint(n)
 	}
 	return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1000), ".0") + "k"
+}
+
+// setupPages are the getting-started pages that end with the DockTail Cloud
+// box. Reference pages (labels, examples, reference, how it works, cloud) do
+// not; every guide does, except the guides index.
+var setupPages = map[string]bool{
+	"quick-start":     true,
+	"installation":    true,
+	"platforms":       true,
+	"tailscale-admin": true,
+}
+
+func showCloudBox(p *page) bool {
+	if p.Guide {
+		return p.Slug != "guides"
+	}
+	return setupPages[p.Slug]
 }
 
 func main() {
@@ -184,6 +202,7 @@ func main() {
 			JSONLD:      jsonLD(p, generatedAt),
 			GeneratedAt: generatedAt,
 			GitHubStars: stars,
+			CloudBox:    showCloudBox(p),
 		}
 		if i > 0 {
 			data.Prev = &navLink{Text: pages[i-1].NavTitle, URL: pages[i-1].URL()}
