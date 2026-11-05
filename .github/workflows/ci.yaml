@@ -50,7 +50,7 @@ jobs:
           go-version: '1.27'
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9
         with:
           # Pinned: "latest" let a new linter release fail main without a code change.
           version: v2.15.0
