@@ -44,6 +44,21 @@ func main() {
 	reconcileInterval := getEnvDuration("RECONCILE_INTERVAL", 60*time.Second)
 	tailscaleSocket := getEnv("TAILSCALE_SOCKET", "/var/run/tailscale/tailscaled.sock")
 
+	// Discovery mode: "containers" (default) reads the containers running on
+	// this Docker node; "swarm" reads every labelled service in the cluster
+	// through the Swarm manager API, so one agent covers the whole cluster.
+	discoveryMode := getEnv("DOCKTAIL_DISCOVERY", "containers")
+	switch discoveryMode {
+	case "containers", "swarm":
+	default:
+		log.Warn().
+			Str("key", "DOCKTAIL_DISCOVERY").
+			Str("value", discoveryMode).
+			Str("default", "containers").
+			Msg("Unknown discovery mode, using containers")
+		discoveryMode = "containers"
+	}
+
 	// Control Plane Configuration
 	tailscaleAPIKey := getSecretEnv("TAILSCALE_API_KEY", "")
 	tailscaleOAuthClientID := getSecretEnv("TAILSCALE_OAUTH_CLIENT_ID", "")
@@ -106,6 +121,7 @@ func main() {
 
 	log.Info().
 		Dur("reconcile_interval", reconcileInterval).
+		Str("discovery", discoveryMode).
 		Str("tailscale_socket", tailscaleSocket).
 		Str("api_sync_method", apiSyncMethod).
 		Str("tailnet", tailscaleTailnet).
@@ -167,6 +183,9 @@ func main() {
 
 	// Create reconciler
 	rec := reconciler.NewReconciler(dockerClient, tailscaleClient, reconcileInterval)
+	if discoveryMode == "swarm" {
+		rec = reconciler.NewSwarmReconciler(dockerClient, tailscaleClient, reconcileInterval)
+	}
 
 	// Setup signal handling
 	ctx, cancel := context.WithCancel(context.Background())

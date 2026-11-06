@@ -33,13 +33,47 @@ type Observer interface {
 	OnEvent(ctx context.Context, event events.Message)
 }
 
+// Discovery supplies the set of Tailscale services to reconcile. The default
+// implementation reads the containers running on this Docker node; the Swarm
+// implementation (see ../docker/swarm.go) reads every labelled service in the
+// cluster instead, so one agent can cover a multi-node cluster.
+type Discovery interface {
+	// Name identifies the discovery mode in logs.
+	Name() string
+	// List returns every DockTail-managed service/funnel to reconcile.
+	List(ctx context.Context) ([]*apptypes.ContainerService, error)
+}
+
 // Reconciler manages the reconciliation loop
 type Reconciler struct {
 	dockerClient    *docker.Client
+	discovery       Discovery
 	tailscaleClient *tailscale.Client
 	interval        time.Duration
 	observer        Observer        // optional; nil unless the cloud module is enabled
 	onResult        func(err error) // optional; told the outcome of every reconcile
+}
+
+// containerDiscovery is the node-local default: labelled containers running on
+// this Docker node, watched through the local docker socket.
+type containerDiscovery struct{ client *docker.Client }
+
+func (containerDiscovery) Name() string { return "containers" }
+
+func (d containerDiscovery) List(ctx context.Context) ([]*apptypes.ContainerService, error) {
+	return d.client.GetEnabledContainers(ctx)
+}
+
+// swarmDiscovery reads labelled services across the whole cluster through the
+// Swarm manager API. Service event watching still comes from the local socket,
+// so a service change on another node is picked up on the next reconcile tick
+// rather than immediately.
+type swarmDiscovery struct{ client *docker.Client }
+
+func (swarmDiscovery) Name() string { return "swarm" }
+
+func (d swarmDiscovery) List(ctx context.Context) ([]*apptypes.ContainerService, error) {
+	return d.client.GetEnabledSwarmServices(ctx)
 }
 
 // SetResultHook installs a function told the outcome of every reconcile cycle
@@ -67,10 +101,34 @@ func triggersReconcile(a events.Action) bool {
 	}
 }
 
-// NewReconciler creates a new reconciler
+// NewReconciler creates a new reconciler using node-local container discovery.
 func NewReconciler(dockerClient *docker.Client, tailscaleClient *tailscale.Client, interval time.Duration) *Reconciler {
+	return NewReconcilerWithDiscovery(
+		dockerClient,
+		tailscaleClient,
+		interval,
+		containerDiscovery{client: dockerClient},
+	)
+}
+
+// NewSwarmReconciler creates a reconciler that discovers labelled services
+// across the whole Swarm cluster instead of only this node's containers. The
+// docker client must point at a manager endpoint.
+func NewSwarmReconciler(dockerClient *docker.Client, tailscaleClient *tailscale.Client, interval time.Duration) *Reconciler {
+	return NewReconcilerWithDiscovery(
+		dockerClient,
+		tailscaleClient,
+		interval,
+		swarmDiscovery{client: dockerClient},
+	)
+}
+
+// NewReconcilerWithDiscovery creates a reconciler with an explicit discovery
+// source.
+func NewReconcilerWithDiscovery(dockerClient *docker.Client, tailscaleClient *tailscale.Client, interval time.Duration, discovery Discovery) *Reconciler {
 	return &Reconciler{
 		dockerClient:    dockerClient,
+		discovery:       discovery,
 		tailscaleClient: tailscaleClient,
 		interval:        interval,
 	}
@@ -143,14 +201,15 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 func (r *Reconciler) reconcile(ctx context.Context) error {
 	log.Info().Msg("Starting reconciliation")
 
-	// Get all enabled containers from Docker
-	containers, err := r.dockerClient.GetEnabledContainers(ctx)
+	// Get all enabled containers (or, in swarm mode, services) from Docker
+	containers, err := r.discovery.List(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrListContainers, err)
 	}
 
 	log.Info().
 		Int("count", len(containers)).
+		Str("source", r.discovery.Name()).
 		Msg("Found enabled containers")
 
 	for _, container := range containers {
