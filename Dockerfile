@@ -28,7 +28,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} GOARM=${TARGETVAR
     -o docktail .
 
 # Tailscale binary stage — ensures CLI version matches the sidecar daemon exactly
-FROM tailscale/tailscale:v1.104.2 AS tailscale
+FROM tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c AS tailscale
 
 # Runtime stage. DockTail runs no tailscaled of its own; it only drives the
 # host's or sidecar's daemon through the tailscale CLI over the mounted socket,

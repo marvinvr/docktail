@@ -7,7 +7,7 @@ require (
 	github.com/docker/go-connections v0.8.2
 	github.com/gorilla/websocket v1.5.3
 	github.com/rs/zerolog v1.35.1
-	github.com/yuin/goldmark v1.8.6
+	github.com/yuin/goldmark v1.8.7
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/term v0.47.0
 )
