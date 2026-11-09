@@ -8,6 +8,7 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/rs/zerolog v1.35.1
 	github.com/yuin/goldmark v1.8.7
+	github.com/yuin/goldmark/v2 v2.1.15
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/term v0.47.0
 )
