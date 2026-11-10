@@ -83,7 +83,10 @@ func TestRunCancelsDockerEventRetry(t *testing.T) {
 				// Join before restoring the global logger even if the regression
 				// returns; the old retry delay must not cause a teardown race.
 				select {
-				case <-done:
+				case err := <-done:
+					if !errors.Is(err, context.Canceled) {
+						t.Errorf("Run after late cancel = %v, want context.Canceled", err)
+					}
 				case <-time.After(30 * time.Second):
 					panic("reconciler did not stop after cancellation")
 				}
