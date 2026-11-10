@@ -114,7 +114,7 @@ Funnel `docktail.funnel.protocol` values:
 
 DockTail attempts to clean up the services and Funnels it advertises locally when it shuts down, reducing stale exposure while it is not running. Service cleanup runs serially, once per service name even when it has several ports: drain first, then clear. Draining stops new connections; DockTail clears the configuration immediately afterward without waiting for all existing connections to finish.
 
-Cleanup has an 8-second budget, leaving headroom within Docker’s default 10-second stop timeout. Cleanup stops scheduling commands when its budget expires. A crash, SIGKILL, daemon error, or the cleanup deadline can leave some services configured or advertised; reconciliation repairs missing advertisements when DockTail resumes.
+Shutdown interrupts Docker event-stream retry delays and stops reconnecting before cleanup. Cleanup has an 8-second budget, leaving headroom within Docker’s default 10-second stop timeout. Cleanup stops scheduling commands when its budget expires. A crash, SIGKILL, daemon error, or the cleanup deadline can leave some services configured or advertised; reconciliation repairs missing advertisements when DockTail resumes.
 
 On startup and every reconciliation cycle, DockTail also reads `tailscale debug prefs`. If a desired service has matching Serve configuration but is missing from `AdvertiseServices`, DockTail restores its advertisement with `tailscale serve advertise` after syncing its control-plane definition (when API sync is enabled). This repairs services left drained but configured after interrupted cleanup without rewriting their endpoints. It uses the same local daemon socket as Serve, requires no additional API credentials, and runs once per service name. Ignored services and service names with endpoint conflicts are excluded from this repair. Failed, malformed, or unsupported prefs reads are treated as unknown state: DockTail skips advertisement repair for that cycle while continuing normal configuration reconciliation.
 
@@ -195,7 +195,9 @@ the container's restart policy re-create the container and with it the mount.
   starting DockTail before `tailscaled` waits rather than exits. At startup
   DockTail also waits up to 15 seconds for the socket before its first
   reconcile, so a sidecar that is still starting does not delay your Services
-  by a whole `RECONCILE_INTERVAL`.
+  by a whole `RECONCILE_INTERVAL`. Optional [Cloud reporting](06-cloud.md#docktail-cloud)
+  starts before this wait, so an unavailable socket does not delay the Cloud
+  connection.
 - Set `EXIT_ON_SOCKET_LOSS=false` to disable it and keep the old behaviour of
   retrying forever.
 
@@ -238,7 +240,8 @@ The image's `HEALTHCHECK` runs `docktail health`, which tracks DockTail itself
 rather than only the Tailscale daemon. The running process rewrites a small
 JSON status file every 10 seconds (and after every reconcile) at `HEALTH_FILE`;
 `docktail health` reads it, prints a one-line verdict, and exits `0` when
-healthy and `1` when not. Nothing listens on a port.
+healthy and `1` when not. The file is written during the startup socket wait,
+with no reconcile completed yet, and removed on shutdown. Nothing listens on a port.
 
 DockTail is **unhealthy** when:
 

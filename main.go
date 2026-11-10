@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -38,6 +39,13 @@ func main() {
 	// Setup logging
 	setupLogging()
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	runAgent(ctx)
+}
+
+// runAgent shares one cancellation context across startup and the running agent.
+func runAgent(ctx context.Context) {
 	log.Info().Str("version", version.Version).Msg("Starting DockTail")
 
 	// Get configuration from environment
@@ -139,38 +147,18 @@ func main() {
 		DeleteUnusedServices: deleteUnusedServices,
 	})
 
-	// tailscaled may still be starting (a sidecar behind a plain depends_on, a
-	// host that is booting). Give it a bounded moment before the version check
-	// and the first reconcile, both of which need the daemon. A signal during
-	// the wait exits cleanly: nothing has been advertised yet that would need
-	// cleaning up.
-	waitCtx, stopWait := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	waitErr := tailscaleClient.WaitForSocket(waitCtx, socketStartupWait, 250*time.Millisecond)
-	interrupted := waitCtx.Err() != nil
-	stopWait()
-	if interrupted {
-		log.Info().Msg("Received shutdown signal while waiting for the Tailscale socket, exiting")
-		return
-	}
-	if waitErr != nil {
-		log.Warn().Err(waitErr).
-			Str("socket", tailscaleSocket).
-			Dur("waited", socketStartupWait).
-			Msg("Tailscale socket is still unreachable; starting anyway and retrying on every reconcile")
-	}
+	// Stop background workers before closing Docker, including an interrupted
+	// startup that never reaches reconciliation or service cleanup.
+	ctx, cancel := context.WithCancel(ctx)
+	var workers sync.WaitGroup
+	defer func() {
+		cancel()
+		workers.Wait()
+	}()
 
-	// Detect CLI/daemon version mismatch (common with host-mode Tailscale)
-	tailscaleClient.DetectVersionMismatch(context.Background())
-	tailscaleClient.WarnIfSocketMissing()
-
-	log.Info().Msg("Tailscale client initialized")
-
-	// Create reconciler
+	// Wire observers before starting Cloud: configuration can arrive while the
+	// socket wait is still in progress, before the first reconcile.
 	rec := reconciler.NewReconciler(dockerClient, tailscaleClient, reconcileInterval)
-
-	// Setup signal handling
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	// Local health status: a small JSON file `docktail health` (the image's
 	// HEALTHCHECK) reads back. Nothing listens on a port.
@@ -197,7 +185,7 @@ func main() {
 				return &health.Cloud{State: s.State, Since: s.Since, Reason: s.Reason}
 			})
 			rec.SetObserver(collector)
-			go collector.Run(ctx)
+			workers.Go(func() { collector.Run(ctx) })
 			log.Info().
 				Str("endpoint", cloudCfg.URL).
 				Str("fingerprint", collector.Fingerprint()).
@@ -207,6 +195,33 @@ func main() {
 		// Logged once at startup only, never per reconcile.
 		log.Info().Msg("DockTail Cloud not connected (optional): multi-host monitoring at https://docktail.org/cloud/")
 	}
+
+	// Publish startup health only after its Cloud source and Tailscale probe
+	// are installed. Run removes the file on cancellation; wait for it on exit.
+	workers.Go(func() { healthTracker.Run(ctx) })
+
+	// tailscaled may still be starting (a sidecar behind a plain depends_on, a
+	// host that is booting). Cloud reports independently during this bounded
+	// wait. No services have been advertised yet, so cancellation skips cleanup.
+	waitErr := tailscaleClient.WaitForSocket(ctx, socketStartupWait, 250*time.Millisecond)
+	if ctx.Err() != nil {
+		log.Info().Msg("Received shutdown signal while waiting for the Tailscale socket, exiting")
+		return
+	}
+	if waitErr != nil {
+		log.Warn().Err(waitErr).
+			Str("socket", tailscaleSocket).
+			Dur("waited", socketStartupWait).
+			Msg("Tailscale socket is still unreachable; starting anyway and retrying on every reconcile")
+	}
+
+	// Detect CLI/daemon version mismatch (common with host-mode Tailscale).
+	tailscaleClient.DetectVersionMismatch(ctx)
+	tailscaleClient.WarnIfSocketMissing()
+	if ctx.Err() != nil {
+		return
+	}
+	log.Info().Msg("Tailscale client initialized")
 
 	// Watch for a tailscaled socket that stops being reachable and never comes
 	// back. This is not a transient error to retry: when the host's tailscaled
@@ -230,26 +245,18 @@ func main() {
 				Msg("Tailscale socket has been unreachable for longer than the grace period, exiting so the container restart policy can re-resolve the mount; if this repeats, ensure DockTail is started with a restart policy and see https://docktail.org/docs/#tailscale-socket-loss")
 		},
 	)
-	go watchdog.Run(ctx)
-	go healthTracker.Run(ctx)
+	workers.Go(func() { watchdog.Run(ctx) })
 	if updateCheck {
-		go version.RunUpdateCheck(ctx, log.Logger)
+		workers.Go(func() { version.RunUpdateCheck(ctx, log.Logger) })
 	}
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		sig := <-sigChan
-		log.Info().Str("signal", sig.String()).Msg("Received shutdown signal, initiating graceful shutdown")
-		cancel()
-	}()
 
 	// Run reconciler
 	log.Info().Msg("Starting reconciliation loop")
 	if err := rec.Run(ctx); err != nil && err != context.Canceled {
 		log.Fatal().Err(err).Msg("Reconciler failed")
 	}
+
+	log.Info().Msg("Initiating graceful shutdown")
 
 	// Graceful shutdown: optionally clean up all Tailscale services and funnels.
 	// When SKIP_SHUTDOWN_CLEANUP is enabled we leave everything advertised so the

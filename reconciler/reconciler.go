@@ -78,9 +78,15 @@ func NewReconciler(dockerClient *docker.Client, tailscaleClient *tailscale.Clien
 
 // Run starts the reconciliation loop
 func (r *Reconciler) Run(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	// Initial reconciliation
 	if err := r.Reconcile(ctx); err != nil {
 		log.Error().Err(err).Msg("Initial reconciliation failed")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	// Start event watcher
@@ -91,15 +97,30 @@ func (r *Reconciler) Run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 
 		case err := <-errChan:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			if err != nil {
 				log.Error().Err(err).Msg("Docker event stream error")
-				// Try to reconnect by continuing
-				time.Sleep(5 * time.Second)
+				// A shutdown must interrupt backoff and never reopen the stream.
+				timer := time.NewTimer(5 * time.Second)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return ctx.Err()
+				case <-timer.C:
+				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				eventsChan, errChan = r.dockerClient.WatchEvents(ctx)
 			}
 

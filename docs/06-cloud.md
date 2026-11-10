@@ -57,6 +57,12 @@ services:
       - DOCKTAIL_CLOUD_KEY=${DOCKTAIL_CLOUD_KEY}
 ```
 
+Cloud reporting starts before DockTail waits for the Tailscale socket. A host
+can connect and report its containers while Tailscale is still starting or
+unavailable; the socket wait and service reconciliation continue independently.
+The local health file reports the Cloud connection and socket availability during
+this wait, and is removed on shutdown.
+
 With no key set, no connection is opened and DockTail runs exactly as before.
 
 `docktail health` reports the connection state (`connecting`, `connected`,
