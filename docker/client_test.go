@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"testing"
 
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+
 	apptypes "github.com/marvinvr/docktail/types"
 )
 
@@ -358,6 +360,30 @@ func TestParseServicePath(t *testing.T) {
 			}
 			if got != tt.want {
 				t.Errorf("parseServicePath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveDescription(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+		image  string
+		want   string
+	}{
+		{name: "label wins", labels: map[string]string{apptypes.LabelDescription: "Media"}, image: "nginx:1.27", want: "Media"},
+		{name: "empty label opts out", labels: map[string]string{apptypes.LabelDescription: ""}, image: "nginx:1.27", want: ""},
+		{name: "OCI title and version", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin", ocispec.AnnotationVersion: "10.10.3"}, image: "jellyfin/jellyfin:latest", want: "Jellyfin:10.10.3"},
+		{name: "OCI title only", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin"}, image: "jellyfin/jellyfin:latest", want: "Jellyfin"},
+		{name: "image tag without digest", image: "nginx:1.27@sha256:abc", want: "nginx:1.27"},
+		{name: "bare image ID is blank", image: "sha256:abc", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resolveDescription(tt.labels, apptypes.LabelDescription, tt.image); got != tt.want {
+				t.Errorf("resolveDescription() = %q, want %q", got, tt.want)
 			}
 		})
 	}

@@ -25,6 +25,8 @@ Access it at `http://web.your-tailnet.ts.net`.
 
 Add a description to label the service in the Tailscale admin panel. Requires API credentials (OAuth or API key), which DockTail syncs to the Service definition's `comment`.
 
+Without this label, DockTail uses the image's OCI `title:version` (for example `Jellyfin:10.10.3`) or just its `title`, or else its image reference (for example `sissbruecker/linkding:latest`). Set `docktail.service.description=` (empty) to keep a comment you wrote in the admin panel.
+
 ```yaml
 services:
   linkding:
