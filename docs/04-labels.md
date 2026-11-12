@@ -30,7 +30,7 @@ Set `docktail.service.direct=false` to use published host ports instead. Use thi
 | `docktail.service.enable` | Yes | - | Enable a private Tailscale service for the container. |
 | `docktail.service.name` | Yes | - | Service name, such as `web` or `api`. |
 | `docktail.service.port` | Yes | - | Backend container port to proxy to. |
-| `docktail.service.description` | No | - | Human-readable description shown for the service in the Tailscale admin panel. Requires API credentials (synced to the Service definition's `comment`). |
+| `docktail.service.description` | No | Image `title:version` or `title`, else image tag | Human-readable description shown for the service in the Tailscale admin panel. Requires API credentials (synced to the Service definition's `comment`). If unset, DockTail uses the image's `org.opencontainers.image.title` and `org.opencontainers.image.version` labels, else the image reference (for example `nginx:1.27`). Set it empty to leave the comment alone. |
 | `docktail.service.direct` | No | `true` | Proxy directly to container IP instead of requiring a published host port. Set `false` when host `tailscaled` cannot reach container IPs (rootless Docker). |
 | `docktail.service.network` | No | `bridge` or first available | Docker network used for direct container IP detection. |
 | `docktail.service.protocol` | No | Smart | Backend protocol. |
@@ -76,7 +76,7 @@ services:
       - "docktail.service.1.port=8001"
 ```
 
-Each indexed service requires its own `name` and `port`. Per-index overridable labels are `name`, `port`, `service-port`, `protocol`, `service-protocol`, `path`, `proxy-protocol`, and `description`. Tags and network settings are inherited from the primary service config.
+Each indexed service requires its own `name` and `port`. Per-index overridable labels are `name`, `port`, `service-port`, `protocol`, `service-protocol`, `path`, `proxy-protocol`, and `description`; an indexed service without its own `description` gets the same image default, not the primary's description. Tags and network settings are inherited from the primary service config.
 
 ### Service Name Conflicts Between Containers
 

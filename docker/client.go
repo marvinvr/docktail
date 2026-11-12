@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/rs/zerolog/log"
 
 	apptypes "github.com/marvinvr/docktail/types"
@@ -37,6 +38,14 @@ type containerCtx struct {
 	isHostNetwork    bool
 	isNoNetwork      bool
 	isDirectMode     bool
+}
+
+// image returns the image reference the container was started from.
+func (cctx *containerCtx) image() string {
+	if cctx.inspect.Config == nil {
+		return ""
+	}
+	return cctx.inspect.Config.Image
 }
 
 // Client wraps the Docker client with our business logic
@@ -168,6 +177,31 @@ func (c *Client) GetEnabledContainers(ctx context.Context) ([]*apptypes.Containe
 	}
 
 	return services, nil
+}
+
+// resolveDescription returns a service's description, using the first of:
+//  1. the description label, if set (even empty)
+//  2. the image's OCI "title:version", if both are set
+//  3. the image's OCI "title", if there is no version
+//  4. the image reference, without its digest (e.g. "nginx:1.27")
+//  5. nothing
+func resolveDescription(labels map[string]string, descriptionLabel, image string) string {
+	label, declared := labels[descriptionLabel] // present, even empty: an empty label opts out of the defaults
+	title, version := labels[ocispec.AnnotationTitle], labels[ocispec.AnnotationVersion]
+	ref, _, _ := strings.Cut(image, "@")
+
+	switch {
+	case declared:
+		return label
+	case title != "" && version != "":
+		return title + ":" + version
+	case title != "":
+		return title
+	case ref != "" && !strings.HasPrefix(ref, "sha256:"):
+		return ref
+	default:
+		return ""
+	}
 }
 
 // resolveProtocols applies smart defaults for container protocol, service port, and service protocol.
@@ -865,7 +899,7 @@ func (c *Client) parseContainerServices(ctx context.Context, containerID string,
 			ContainerName:      cctx.containerName,
 			ServiceEnabled:     true,
 			ServiceName:        serviceName,
-			ServiceDescription: labels[apptypes.LabelDescription],
+			ServiceDescription: resolveDescription(labels, apptypes.LabelDescription, cctx.image()),
 			Port:               port,
 			TargetPort:         destPort,
 			ServiceProtocol:    serviceProtocol,
@@ -1062,7 +1096,7 @@ func (c *Client) parseIndexedPorts(
 			ContainerName:      cctx.containerName,
 			ServiceEnabled:     true,
 			ServiceName:        idxServiceName,
-			ServiceDescription: labels[prefix+"description"],
+			ServiceDescription: resolveDescription(labels, prefix+"description", cctx.image()),
 			Port:               servicePort,
 			TargetPort:         idxDestPort,
 			ServiceProtocol:    serviceProtocol,
