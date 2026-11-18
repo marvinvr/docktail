@@ -9,6 +9,7 @@ require (
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/rs/zerolog v1.35.1
 	github.com/yuin/goldmark v1.8.7
+	github.com/yuin/goldmark/v2 v2.1.16
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/term v0.47.0
 )
