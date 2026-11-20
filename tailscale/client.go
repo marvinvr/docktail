@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +33,8 @@ type Client struct {
 	managedFunnels       map[string]struct{}
 	ignoredServices      map[string]struct{}
 	deleteUnusedServices bool
+	onceMu               sync.Mutex          // guards logged
+	logged               map[string]struct{} // warnings already logged, see firstTime
 }
 
 // setServerVersion / getServerVersion guard serverVersion so the DockTail Cloud
@@ -543,6 +547,9 @@ type serviceDef struct {
 	Ports              []string
 	Description        string
 	DefaultDescription string // image-derived fallback, see SyncServiceDefinition
+	// RequiredPorts must be allowed by an existing definition too: the
+	// derived HTTP redirect port, which DockTail adds when it is missing.
+	RequiredPorts []string
 }
 
 // aggregateServiceDefinitions deduplicates the desired services by name,
@@ -580,6 +587,9 @@ func aggregateServiceDefinitions(services []*apptypes.ContainerService) map[stri
 		if !found {
 			def.Ports = append(def.Ports, svc.Port)
 		}
+		if svc.RedirectTo != "" && !slices.Contains(def.RequiredPorts, svc.Port) {
+			def.RequiredPorts = append(def.RequiredPorts, svc.Port)
+		}
 	}
 
 	return uniqueServices
@@ -595,7 +605,7 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 
 	var failed []string
 	for name, def := range uniqueServices {
-		if err := c.SyncServiceDefinition(ctx, name, def.Tags, def.Ports, def.Description, def.DefaultDescription); err != nil {
+		if err := c.syncServiceDefinition(ctx, name, def); err != nil {
 			failed = append(failed, name)
 			log.Error().
 				Err(err).
@@ -626,7 +636,17 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 // touched on existing services: the definition is tailnet-global and other
 // hosts may back the same service, so no single instance knows the full
 // desired port set.
+//
+// The one exception to "ports are never touched" is additive: a port in
+// RequiredPorts (the derived HTTP redirect port) that the existing definition
+// does not allow is appended, since DockTail itself serves it on this host and
+// it would be unreachable otherwise. No port is ever removed.
 func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, tags []string, ports []string, description, defaultDescription string) error {
+	return c.syncServiceDefinition(ctx, serviceName, &serviceDef{Tags: tags, Ports: ports, Description: description, DefaultDescription: defaultDescription})
+}
+
+func (c *Client) syncServiceDefinition(ctx context.Context, serviceName string, def *serviceDef) error {
+	tags, ports, description, defaultDescription := def.Tags, def.Ports, def.Description, def.DefaultDescription
 	if !strings.HasPrefix(serviceName, "svc:") {
 		serviceName = "svc:" + serviceName
 	}
@@ -643,8 +663,14 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 		}
 		tagsDrifted := len(tags) > 0 && !sameStringSet(existing.Tags, tags)
 		descriptionDrifted := description != "" && existing.Comment != description
+		var missingPorts []string
+		for _, p := range def.RequiredPorts {
+			if !definitionAllowsPort(existing.Ports, p) {
+				missingPorts = append(missingPorts, "tcp:"+p)
+			}
+		}
 
-		if !tagsDrifted && !descriptionDrifted {
+		if !tagsDrifted && !descriptionDrifted && len(missingPorts) == 0 {
 			log.Debug().
 				Str("service", serviceName).
 				Strs("existing_tags", existing.Tags).
@@ -672,11 +698,20 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 				Msg("Updating service description in Control Plane")
 		}
 
+		desiredPorts := existing.Ports
+		if len(missingPorts) > 0 {
+			desiredPorts = append(append([]string(nil), existing.Ports...), missingPorts...)
+			log.Info().
+				Str("service", serviceName).
+				Strs("added_ports", missingPorts).
+				Msg("Adding the HTTP redirect port to the Service definition")
+		}
+
 		payload := map[string]interface{}{
 			"name":    serviceName,
 			"addrs":   existing.Addrs,
 			"tags":    desiredTags,
-			"ports":   existing.Ports,
+			"ports":   desiredPorts,
 			"comment": comment,
 		}
 		return c.putService(ctx, serviceName, payload)
@@ -1182,4 +1217,32 @@ func imageName(ref string) string {
 		return ref[:i]
 	}
 	return ref
+}
+
+// definitionAllowsPort reports whether a Service definition's port list
+// ("tcp:443", "tcp:8000-8100", "tcp:*") allows TCP port port.
+func definitionAllowsPort(ports []string, port string) bool {
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return slices.Contains(ports, "tcp:"+port)
+	}
+	for _, entry := range ports {
+		spec, ok := strings.CutPrefix(entry, "tcp:")
+		if !ok {
+			continue
+		}
+		if spec == "*" {
+			return true
+		}
+		lo, hi, isRange := strings.Cut(spec, "-")
+		if !isRange {
+			hi = lo
+		}
+		a, errA := strconv.Atoi(lo)
+		b, errB := strconv.Atoi(hi)
+		if errA == nil && errB == nil && a <= n && n <= b {
+			return true
+		}
+	}
+	return false
 }

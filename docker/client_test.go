@@ -374,8 +374,13 @@ func TestParseHTTPRedirect(t *testing.T) {
 		want            bool
 		wantError       bool
 	}{
-		{name: "unset is off", serviceProtocol: "https", servicePort: "443"},
+		{name: "unset is on for https", serviceProtocol: "https", servicePort: "443", want: true},
+		{name: "unset is on for custom https port", serviceProtocol: "https", servicePort: "8443", want: true},
+		{name: "unset is off for https on port 80", serviceProtocol: "https", servicePort: "80"},
 		{name: "unset on http is off", serviceProtocol: "http", servicePort: "80"},
+		{name: "unset on tcp is off", serviceProtocol: "tcp", servicePort: "443"},
+		{name: "false opts out on https", value: "false", serviceProtocol: "https", servicePort: "443"},
+		{name: "blank opts nothing out", value: "  ", serviceProtocol: "https", servicePort: "443", want: true},
 		{name: "true on https", value: "true", serviceProtocol: "https", servicePort: "443", want: true},
 		{name: "true on custom https port", value: " TRUE ", serviceProtocol: "https", servicePort: "8443", want: true},
 		{name: "false on http is accepted", value: "false", serviceProtocol: "http", servicePort: "80"},

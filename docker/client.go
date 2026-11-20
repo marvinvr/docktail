@@ -335,14 +335,16 @@ func parseProxyProtocol(value, serviceProtocol string) (int, error) {
 	}
 }
 
-// parseHTTPRedirect validates docktail.service.http-redirect. Empty means off.
-// The redirect answers plain HTTP on port 80 of the same service and points at
-// its HTTPS endpoint, so it only makes sense for service-protocol https on a
-// port other than 80; anything else is rejected instead of silently ignored.
+// parseHTTPRedirect validates docktail.service.http-redirect. The redirect
+// answers plain HTTP on port 80 of the same service and points at its HTTPS
+// endpoint. Unset, it is on for every service-protocol https endpoint that is
+// not itself on port 80, and off for everything else; "false" opts out. An
+// explicit "true" where a redirect is impossible (not https, or https on port
+// 80) is rejected instead of silently ignored.
 func parseHTTPRedirect(value, serviceProtocol, servicePort string) (bool, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
-		return false, nil
+		return serviceProtocol == "https" && servicePort != "80", nil
 	}
 	enabled, err := strconv.ParseBool(value)
 	if err != nil {

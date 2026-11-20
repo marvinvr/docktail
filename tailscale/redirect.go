@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,8 @@ import (
 	apptypes "github.com/marvinvr/docktail/types"
 )
 
-// HTTP-to-HTTPS redirects (docktail.service.http-redirect).
+// HTTP-to-HTTPS redirects (docktail.service.http-redirect, on by default for
+// service-protocol https).
 //
 // Tailscale Serve can answer an HTTP handler with a redirect (the HTTPHandler
 // "Redirect" field, tailscaled 1.92+), but the tailscale CLI has no flag that
@@ -69,26 +71,50 @@ func redirectWebKey(serviceName, port, magicDNSSuffix string) string {
 	return serviceName + "." + magicDNSSuffix + ":" + port
 }
 
-// expandHTTPRedirects returns desired plus one derived port-80 endpoint per
-// enabled service that asked for an HTTP redirect. Deriving them as ordinary
-// endpoints keeps everything downstream unchanged: conflict detection (a
-// container serving port 80 on the same name conflicts), Service definition
-// port sync (new definitions get tcp:80) and stale-endpoint removal.
-func expandHTTPRedirects(desired []*apptypes.ContainerService, magicDNSSuffix string) []*apptypes.ContainerService {
-	out := desired
-	// One container asking for a redirect on several HTTPS ports of the same
-	// service still gets a single port-80 listener (the first port wins), not
-	// a conflict with itself.
-	seen := map[string]struct{}{}
+// expandHTTPRedirects returns desired plus one derived port-80 redirect
+// endpoint per service name with an enabled HTTPS endpoint that wants one (the
+// default for service-protocol https). Deriving them as ordinary endpoints
+// keeps everything downstream unchanged: Service definition port sync (new
+// definitions get tcp:80) and stale-endpoint removal.
+//
+// A redirect never creates a conflict:
+//   - a service name whose port 80 is declared by any container, or which is
+//     ignored (DockTail must not touch it), gets no redirect; those names are
+//     returned as skipped, for logging;
+//   - several redirecting HTTPS ports or containers on one name share a single
+//     redirect, aimed at port 443 when one of them serves it, else at the
+//     lowest port (ties broken by container name, so the pick is stable).
+func expandHTTPRedirects(desired []*apptypes.ContainerService, magicDNSSuffix string, ignored func(name string) bool) (out []*apptypes.ContainerService, skipped []string) {
+	port80 := make(map[string]struct{})
+	targets := make(map[string]*apptypes.ContainerService)
 	for _, svc := range desired {
-		if !svc.ServiceEnabled || !svc.HTTPRedirect || svc.ServiceProtocol != "https" {
+		if !svc.ServiceEnabled {
 			continue
 		}
-		key := svc.ContainerName + "\x00" + svc.ServiceName
-		if _, dup := seen[key]; dup {
+		if svc.Port == httpRedirectPort {
+			port80[svc.ServiceName] = struct{}{}
+		}
+		if !svc.HTTPRedirect || svc.ServiceProtocol != "https" {
 			continue
 		}
-		seen[key] = struct{}{}
+		if best, ok := targets[svc.ServiceName]; !ok || betterRedirectTarget(svc, best) {
+			targets[svc.ServiceName] = svc
+		}
+	}
+
+	names := make([]string, 0, len(targets))
+	for name := range targets {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	out = desired
+	for _, name := range names {
+		if _, taken := port80[name]; taken || (ignored != nil && ignored(name)) {
+			skipped = append(skipped, name)
+			continue
+		}
+		svc := targets[name]
 		if len(out) == len(desired) {
 			out = append([]*apptypes.ContainerService(nil), desired...)
 		}
@@ -106,7 +132,27 @@ func expandHTTPRedirects(desired []*apptypes.ContainerService, magicDNSSuffix st
 			RedirectTo:         redirectTarget(svc.ServiceName, svc.Port, magicDNSSuffix),
 		})
 	}
-	return out
+	return out, skipped
+}
+
+// betterRedirectTarget reports whether HTTPS endpoint a is a better redirect
+// target than b for the same service name.
+func betterRedirectTarget(a, b *apptypes.ContainerService) bool {
+	if (a.Port == "443") != (b.Port == "443") {
+		return a.Port == "443"
+	}
+	if pa, pb := portNumber(a.Port), portNumber(b.Port); pa != pb {
+		return pa < pb
+	}
+	return a.ContainerName < b.ContainerName
+}
+
+func portNumber(port string) int {
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return 1 << 30
+	}
+	return n
 }
 
 func wantsHTTPRedirect(desired []*apptypes.ContainerService) bool {
@@ -114,7 +160,7 @@ func wantsHTTPRedirect(desired []*apptypes.ContainerService) bool {
 }
 
 // httpRedirectServiceNames returns the "svc:"-prefixed names of the enabled
-// services that ask for an HTTP redirect.
+// services that want an HTTP redirect.
 func httpRedirectServiceNames(desired []*apptypes.ContainerService) map[string]struct{} {
 	names := make(map[string]struct{})
 	for _, svc := range desired {
@@ -125,11 +171,11 @@ func httpRedirectServiceNames(desired []*apptypes.ContainerService) map[string]s
 	return names
 }
 
-// withHTTPRedirects adds the derived redirect endpoints when any service asks
-// for one. Without a MagicDNS suffix, or on a tailscaled too old to serve a
-// redirect, it logs why and leaves them out, so the HTTPS endpoints themselves
-// are never held back.
-// The MagicDNS suffix is returned for writing the redirect handlers.
+// withHTTPRedirects adds the derived redirect endpoints when any service wants
+// one. Without a MagicDNS suffix, or on a tailscaled too old to serve a
+// redirect, it warns once and leaves them out, so the HTTPS endpoints
+// themselves are never held back. The MagicDNS suffix is returned for writing
+// the redirect handlers.
 func (c *Client) withHTTPRedirects(ctx context.Context, desired []*apptypes.ContainerService) ([]*apptypes.ContainerService, string) {
 	if !wantsHTTPRedirect(desired) {
 		return desired, ""
@@ -140,16 +186,54 @@ func (c *Client) withHTTPRedirects(ctx context.Context, desired []*apptypes.Cont
 		return desired, ""
 	}
 	if st.MagicDNSSuffix == "" {
-		log.Warn().Msg("HTTP redirects skipped: tailscaled reports no MagicDNS suffix; enable MagicDNS and HTTPS certificates for the tailnet")
+		if c.firstTime("redirect-no-magicdns") {
+			log.Warn().Msgf("HTTP-to-HTTPS redirects are off: tailscaled reports no MagicDNS suffix. Enable MagicDNS and HTTPS certificates for the tailnet, or set %s=false to silence this. HTTPS is not affected.", apptypes.LabelHTTPRedirect)
+		}
 		return desired, ""
 	}
 	if !supportsServeRedirect(st.Version) {
-		log.Warn().
-			Str("tailscaled_version", st.Version).
-			Msgf("HTTP redirects skipped: tailscaled %s does not support Serve redirects; update it to %d.%d or newer", st.Version, redirectMinMajor, redirectMinMinor)
+		if c.firstTime("redirect-old-tailscaled") {
+			log.Warn().
+				Str("tailscaled_version", st.Version).
+				Msgf("HTTP-to-HTTPS redirects are off: tailscaled %s cannot serve redirects. Update tailscaled to %d.%d or newer, or set %s=false to silence this. HTTPS is not affected.", st.Version, redirectMinMajor, redirectMinMinor, apptypes.LabelHTTPRedirect)
+		}
 		return desired, ""
 	}
-	return expandHTTPRedirects(desired, st.MagicDNSSuffix), st.MagicDNSSuffix
+
+	out, skipped := expandHTTPRedirects(desired, st.MagicDNSSuffix, c.shouldIgnoreService)
+	for _, name := range skipped {
+		if c.firstTime("redirect-skipped:" + name) {
+			log.Info().
+				Str("service", "svc:"+name).
+				Msgf("HTTP redirect skipped: port 80 of this service is already used, so it stays as declared. Set %s=false on its HTTPS endpoint to silence this.", apptypes.LabelHTTPRedirect)
+		}
+	}
+	if !c.apiSyncEnabled {
+		for _, svc := range out[len(desired):] {
+			if c.firstTime("redirect-no-api:" + svc.ServiceName) {
+				log.Warn().
+					Str("service", "svc:"+svc.ServiceName).
+					Msgf("HTTP redirect configured on port 80, but without Tailscale API credentials DockTail cannot add tcp:80 to the Service definition. Add tcp:80 to svc:%s in the admin console (Services), configure API credentials so DockTail does it, or set %s=false.", svc.ServiceName, apptypes.LabelHTTPRedirect)
+			}
+		}
+	}
+	return out, st.MagicDNSSuffix
+}
+
+// firstTime reports whether key is seen for the first time in this process,
+// so a warning about a lasting condition is logged once instead of on every
+// reconcile.
+func (c *Client) firstTime(key string) bool {
+	c.onceMu.Lock()
+	defer c.onceMu.Unlock()
+	if _, seen := c.logged[key]; seen {
+		return false
+	}
+	if c.logged == nil {
+		c.logged = make(map[string]struct{})
+	}
+	c.logged[key] = struct{}{}
+	return true
 }
 
 // supportsServeRedirect reports whether a tailscaled version ("1.104.4-t...")

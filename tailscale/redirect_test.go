@@ -1,11 +1,13 @@
 package tailscale
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	apptypes "github.com/marvinvr/docktail/types"
 )
@@ -59,12 +64,12 @@ func TestExpandHTTPRedirects(t *testing.T) {
 	plain := &apptypes.ContainerService{ContainerName: "db", ServiceEnabled: true, ServiceName: "db", Port: "5432", ServiceProtocol: "tcp"}
 	desired := []*apptypes.ContainerService{redirectHTTPSService(), plain}
 
-	got := expandHTTPRedirects(desired, "tail1234.ts.net")
+	got, skipped := expandHTTPRedirects(desired, "tail1234.ts.net", nil)
 	if len(desired) != 2 {
 		t.Fatal("expandHTTPRedirects must not modify its input slice")
 	}
-	if len(got) != 3 {
-		t.Fatalf("got %d services, want 3", len(got))
+	if len(got) != 3 || len(skipped) != 0 {
+		t.Fatalf("got %d services (skipped %v), want 3", len(got), skipped)
 	}
 	r := got[2]
 	if r.ServiceName != "web" || r.Port != "80" || r.ServiceProtocol != "http" ||
@@ -72,34 +77,133 @@ func TestExpandHTTPRedirects(t *testing.T) {
 		t.Errorf("derived redirect endpoint = %+v", r)
 	}
 
-	// New Service definitions get the redirect port too.
+	// New Service definitions get the redirect port, and existing ones are
+	// required to allow it.
 	defs := aggregateServiceDefinitions(got)
 	if !slices.Equal(defs["web"].Ports, []string{"443", "80"}) {
 		t.Errorf("web definition ports = %v, want [443 80]", defs["web"].Ports)
 	}
-
-	// A container serving port 80 itself on the same name conflicts instead of
-	// silently losing to (or overriding) the redirect.
-	other := &apptypes.ContainerService{ContainerName: "legacy", ServiceEnabled: true, ServiceName: "web", Port: "80", ServiceProtocol: "http"}
-	_, conflicts := buildDesiredServiceMap(append(got, other))
-	if names := conflicts["svc:web:80"]; !slices.Equal(names, []string{"web", "legacy"}) {
-		t.Errorf("conflicts[svc:web:80] = %v, want [web legacy]", names)
+	if !slices.Equal(defs["web"].RequiredPorts, []string{"80"}) {
+		t.Errorf("web definition required ports = %v, want [80]", defs["web"].RequiredPorts)
+	}
+	if len(defs["db"].RequiredPorts) != 0 {
+		t.Errorf("db definition required ports = %v, want none", defs["db"].RequiredPorts)
 	}
 
-	if out := expandHTTPRedirects([]*apptypes.ContainerService{plain}, "tail1234.ts.net"); len(out) != 1 {
+	if out, _ := expandHTTPRedirects([]*apptypes.ContainerService{plain}, "tail1234.ts.net", nil); len(out) != 1 {
 		t.Errorf("no redirect requested: got %d services, want 1", len(out))
 	}
 
-	// Two redirecting HTTPS ports of one container share a single :80
-	// listener instead of conflicting with each other.
-	alt := redirectHTTPSService()
-	alt.Port = "8443"
-	both := expandHTTPRedirects([]*apptypes.ContainerService{redirectHTTPSService(), alt}, "tail1234.ts.net")
-	if len(both) != 3 {
-		t.Fatalf("two redirecting ports: got %d services, want 3", len(both))
+	optedOut := redirectHTTPSService()
+	optedOut.HTTPRedirect = false
+	if out, _ := expandHTTPRedirects([]*apptypes.ContainerService{optedOut}, "tail1234.ts.net", nil); len(out) != 1 {
+		t.Errorf("opted out: got %d services, want 1", len(out))
 	}
-	if _, conflicts := buildDesiredServiceMap(both); len(conflicts) != 0 {
-		t.Errorf("two redirecting ports of one container conflict: %v", conflicts)
+}
+
+func TestExpandHTTPRedirectsNeverConflicts(t *testing.T) {
+	const suffix = "tail1234.ts.net"
+	httpsOn := func(container, port string) *apptypes.ContainerService {
+		svc := redirectHTTPSService()
+		svc.ContainerName, svc.Port = container, port
+		return svc
+	}
+
+	t.Run("port 80 declared by another container", func(t *testing.T) {
+		legacy := &apptypes.ContainerService{ContainerName: "legacy", ServiceEnabled: true, ServiceName: "web", Port: "80", ServiceProtocol: "http"}
+		out, skipped := expandHTTPRedirects([]*apptypes.ContainerService{redirectHTTPSService(), legacy}, suffix, nil)
+		if len(out) != 2 || !slices.Equal(skipped, []string{"web"}) {
+			t.Fatalf("got %d services, skipped %v; want 2 and [web]", len(out), skipped)
+		}
+		if _, conflicts := buildDesiredServiceMap(out); len(conflicts) != 0 {
+			t.Errorf("conflicts = %v, want none", conflicts)
+		}
+	})
+
+	t.Run("port 80 declared by the same container", func(t *testing.T) {
+		own := &apptypes.ContainerService{ContainerName: "web", ServiceEnabled: true, ServiceName: "web", Port: "80", ServiceProtocol: "http"}
+		out, skipped := expandHTTPRedirects([]*apptypes.ContainerService{redirectHTTPSService(), own}, suffix, nil)
+		if len(out) != 2 || !slices.Equal(skipped, []string{"web"}) {
+			t.Fatalf("got %d services, skipped %v; want 2 and [web]", len(out), skipped)
+		}
+	})
+
+	t.Run("disabled port 80 does not block", func(t *testing.T) {
+		off := &apptypes.ContainerService{ContainerName: "legacy", ServiceEnabled: false, ServiceName: "web", Port: "80", ServiceProtocol: "http"}
+		if out, skipped := expandHTTPRedirects([]*apptypes.ContainerService{redirectHTTPSService(), off}, suffix, nil); len(out) != 3 || len(skipped) != 0 {
+			t.Fatalf("got %d services, skipped %v; want 3 and none", len(out), skipped)
+		}
+	})
+
+	t.Run("ignored service", func(t *testing.T) {
+		ignored := func(name string) bool { return name == "web" }
+		out, skipped := expandHTTPRedirects([]*apptypes.ContainerService{redirectHTTPSService()}, suffix, ignored)
+		if len(out) != 1 || !slices.Equal(skipped, []string{"web"}) {
+			t.Fatalf("got %d services, skipped %v; want 1 and [web]", len(out), skipped)
+		}
+	})
+
+	t.Run("several HTTPS ports share one redirect aimed at 443", func(t *testing.T) {
+		for _, order := range [][]*apptypes.ContainerService{
+			{httpsOn("web", "8443"), httpsOn("web", "443")},
+			{httpsOn("web", "443"), httpsOn("web", "8443")},
+		} {
+			out, _ := expandHTTPRedirects(order, suffix, nil)
+			if len(out) != 3 {
+				t.Fatalf("got %d services, want 3", len(out))
+			}
+			if got := out[2].RedirectTo; got != "308:https://web.tail1234.ts.net${REQUEST_URI}" {
+				t.Errorf("redirect target = %q, want port 443", got)
+			}
+			if _, conflicts := buildDesiredServiceMap(out); len(conflicts) != 0 {
+				t.Errorf("conflicts = %v, want none", conflicts)
+			}
+		}
+	})
+
+	t.Run("several containers share one redirect at the lowest port", func(t *testing.T) {
+		for _, order := range [][]*apptypes.ContainerService{
+			{httpsOn("b", "9443"), httpsOn("a", "8443")},
+			{httpsOn("a", "8443"), httpsOn("b", "9443")},
+		} {
+			out, _ := expandHTTPRedirects(order, suffix, nil)
+			if len(out) != 3 {
+				t.Fatalf("got %d services, want 3", len(out))
+			}
+			r := out[2]
+			if r.ContainerName != "a" || r.RedirectTo != "308:https://web.tail1234.ts.net:8443${REQUEST_URI}" {
+				t.Errorf("redirect = %s %q, want a -> :8443", r.ContainerName, r.RedirectTo)
+			}
+			if _, conflicts := buildDesiredServiceMap(out); len(conflicts) != 0 {
+				t.Errorf("conflicts = %v, want none", conflicts)
+			}
+		}
+	})
+}
+
+// expandHTTPRedirectsAll is expandHTTPRedirects without an ignore list.
+func expandHTTPRedirectsAll(desired []*apptypes.ContainerService, suffix string) []*apptypes.ContainerService {
+	out, _ := expandHTTPRedirects(desired, suffix, nil)
+	return out
+}
+
+func TestDefinitionAllowsPort(t *testing.T) {
+	tests := []struct {
+		ports []string
+		want  bool
+	}{
+		{nil, false},
+		{[]string{"tcp:443"}, false},
+		{[]string{"tcp:443", "tcp:80"}, true},
+		{[]string{"tcp:1-1024"}, true},
+		{[]string{"tcp:81-90"}, false},
+		{[]string{"tcp:*"}, true},
+		{[]string{"udp:80"}, false},
+	}
+	for _, tt := range tests {
+		if got := definitionAllowsPort(tt.ports, "80"); got != tt.want {
+			t.Errorf("definitionAllowsPort(%v, 80) = %v, want %v", tt.ports, got, tt.want)
+		}
 	}
 }
 
@@ -122,14 +226,14 @@ func TestParseManagedServicesRedirect(t *testing.T) {
 		t.Errorf("https endpoint = %+v", h)
 	}
 
-	desired := expandHTTPRedirects([]*apptypes.ContainerService{redirectHTTPSService()}, "tail1234.ts.net")
+	desired := expandHTTPRedirectsAll([]*apptypes.ContainerService{redirectHTTPSService()}, "tail1234.ts.net")
 	if serviceConfigChanged(r, desired[1]) {
 		t.Error("matching redirect reported as changed")
 	}
 	if !serviceConfigChanged(r, redirectHTTPSService()) {
 		t.Error("redirect replaced by a proxy must be reported as changed")
 	}
-	moved := expandHTTPRedirects([]*apptypes.ContainerService{redirectHTTPSService()}, "other.ts.net")
+	moved := expandHTTPRedirectsAll([]*apptypes.ContainerService{redirectHTTPSService()}, "other.ts.net")
 	if !serviceConfigChanged(r, moved[1]) {
 		t.Error("redirect with a different target must be reported as changed")
 	}
@@ -325,4 +429,119 @@ func TestReconcileHTTPRedirectOldTailscaled(t *testing.T) {
 	if api.posts != 0 {
 		t.Errorf("wrote a redirect to a tailscaled that cannot serve it (%d posts)", api.posts)
 	}
+}
+
+func TestSyncServiceDefinitionAddsRedirectPort(t *testing.T) {
+	tests := []struct {
+		name      string
+		existing  []string
+		wantPut   bool
+		wantPorts []string
+	}{
+		{name: "missing tcp:80 is appended", existing: []string{"tcp:443"}, wantPut: true, wantPorts: []string{"tcp:443", "tcp:80"}},
+		{name: "allowed by a range", existing: []string{"tcp:1-1024"}},
+		{name: "already listed", existing: []string{"tcp:443", "tcp:80"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var put *servicePutPayload
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case http.MethodGet:
+					_ = json.NewEncoder(w).Encode(apiService{Name: "svc:web", Addrs: []string{"100.100.1.1"}, Tags: []string{"tag:container"}, Ports: tt.existing, Comment: "manual"})
+				case http.MethodPut:
+					var payload servicePutPayload
+					_ = json.NewDecoder(r.Body).Decode(&payload)
+					put = &payload
+				}
+			}))
+			defer srv.Close()
+			c := &Client{baseURL: srv.URL, tailnet: "example.com", httpClient: srv.Client(), apiSyncEnabled: true}
+
+			defs := aggregateServiceDefinitions(expandHTTPRedirectsAll([]*apptypes.ContainerService{redirectHTTPSService()}, "tail1234.ts.net"))
+			if err := c.syncServiceDefinition(context.Background(), "web", defs["web"]); err != nil {
+				t.Fatalf("sync: %v", err)
+			}
+			if !tt.wantPut {
+				if put != nil {
+					t.Fatalf("unexpected PUT %+v", *put)
+				}
+				return
+			}
+			if put == nil {
+				t.Fatal("expected a PUT adding the redirect port")
+			}
+			if !slices.Equal(put.Ports, tt.wantPorts) || put.Comment != "manual" ||
+				!slices.Equal(put.Tags, []string{"tag:container"}) || !slices.Equal(put.Addrs, []string{"100.100.1.1"}) {
+				t.Errorf("PUT = %+v, want ports %v and everything else kept", *put, tt.wantPorts)
+			}
+		})
+	}
+}
+
+// captureLogs routes the global logger into a buffer for the test.
+func captureLogs(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	previous := log.Logger
+	log.Logger = zerolog.New(&buf)
+	t.Cleanup(func() { log.Logger = previous })
+	return &buf
+}
+
+func TestReconcileHTTPRedirectSkipsTakenPort80(t *testing.T) {
+	dir, _ := fakeRedirectCLI(t, "1.104.4-tabc")
+	api, sock := startFakeLocalAPI(t, dir)
+	logs := captureLogs(t)
+	c := NewClient(ClientConfig{SocketPath: sock})
+	legacy := &apptypes.ContainerService{
+		ContainerName: "legacy", ServiceEnabled: true, ServiceName: "web", Port: "80",
+		ServiceProtocol: "http", Protocol: "http", IPAddress: "172.17.0.3", TargetPort: "80",
+	}
+	for i := 0; i < 2; i++ {
+		if err := c.ReconcileServices(context.Background(), []*apptypes.ContainerService{redirectHTTPSService(), legacy}); err != nil {
+			t.Fatalf("reconcile %d: %v", i, err)
+		}
+	}
+	if api.posts != 0 {
+		t.Errorf("wrote a redirect over a declared port 80 (%d posts)", api.posts)
+	}
+	if n := strings.Count(logs.String(), "HTTP redirect skipped"); n != 1 {
+		t.Errorf("skip logged %d times, want once:\n%s", n, logs)
+	}
+	if strings.Contains(logs.String(), "conflict") {
+		t.Errorf("a skipped redirect reported a conflict:\n%s", logs)
+	}
+}
+
+func TestReconcileHTTPRedirectWarnsOnce(t *testing.T) {
+	t.Run("old tailscaled", func(t *testing.T) {
+		dir, _ := fakeRedirectCLI(t, "1.90.1-tabc")
+		_, sock := startFakeLocalAPI(t, dir)
+		logs := captureLogs(t)
+		c := NewClient(ClientConfig{SocketPath: sock})
+		for i := 0; i < 3; i++ {
+			if err := c.ReconcileServices(context.Background(), []*apptypes.ContainerService{redirectHTTPSService()}); err != nil {
+				t.Fatalf("reconcile %d: %v", i, err)
+			}
+		}
+		if n := strings.Count(logs.String(), "cannot serve redirects"); n != 1 {
+			t.Errorf("old tailscaled warning logged %d times, want once:\n%s", n, logs)
+		}
+	})
+
+	t.Run("no API credentials", func(t *testing.T) {
+		dir, _ := fakeRedirectCLI(t, "1.104.4-tabc")
+		_, sock := startFakeLocalAPI(t, dir)
+		logs := captureLogs(t)
+		c := NewClient(ClientConfig{SocketPath: sock})
+		for i := 0; i < 3; i++ {
+			if err := c.ReconcileServices(context.Background(), []*apptypes.ContainerService{redirectHTTPSService()}); err != nil {
+				t.Fatalf("reconcile %d: %v", i, err)
+			}
+		}
+		if n := strings.Count(logs.String(), "cannot add tcp:80 to the Service definition"); n != 1 {
+			t.Errorf("missing-credentials warning logged %d times, want once:\n%s", n, logs)
+		}
+	})
 }

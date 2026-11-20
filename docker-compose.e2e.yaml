@@ -315,6 +315,63 @@ services:
       - "docktail.tags=tag:web,tag:production"
 
   # ============================================================================
+  # 5a. HTTP-to-HTTPS Redirect (on by default for service-protocol https)
+  # ============================================================================
+
+  # HTTPS service without any redirect label: gets the port-80 redirect
+  test-redirect:
+    image: nginx:1.31-alpine
+    container_name: e2e-redirect
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-redirect"
+      - "docktail.service.port=80"
+      - "docktail.service.protocol=http"
+      - "docktail.service.service-port=443"
+      - "docktail.service.service-protocol=https"
+
+  # Opted out: HTTPS only, no port 80
+  test-redirect-optout:
+    image: nginx:1.31-alpine
+    container_name: e2e-redirect-optout
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-redirect-optout"
+      - "docktail.service.port=80"
+      - "docktail.service.protocol=http"
+      - "docktail.service.service-port=443"
+      - "docktail.service.service-protocol=https"
+      - "docktail.service.http-redirect=false"
+
+  # Port 80 of the service is declared by another container: the redirect
+  # steps aside instead of conflicting
+  test-redirect-taken:
+    image: nginx:1.31-alpine
+    container_name: e2e-redirect-taken
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-redirect-taken"
+      - "docktail.service.port=80"
+      - "docktail.service.protocol=http"
+      - "docktail.service.service-port=443"
+      - "docktail.service.service-protocol=https"
+
+  test-redirect-taken-http:
+    image: nginx:1.31-alpine
+    container_name: e2e-redirect-taken-http
+    restart: "no"
+    labels:
+      - "docktail.service.enable=true"
+      - "docktail.service.name=e2e-redirect-taken"
+      - "docktail.service.port=80"
+      - "docktail.service.protocol=http"
+      - "docktail.service.service-port=80"
+      - "docktail.service.service-protocol=http"
+
+  # ============================================================================
   # 6. Multiple Services from One Container
   # ============================================================================
 
