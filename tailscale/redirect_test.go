@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -88,6 +89,18 @@ func TestExpandHTTPRedirects(t *testing.T) {
 	if out := expandHTTPRedirects([]*apptypes.ContainerService{plain}, "tail1234.ts.net"); len(out) != 1 {
 		t.Errorf("no redirect requested: got %d services, want 1", len(out))
 	}
+
+	// Two redirecting HTTPS ports of one container share a single :80
+	// listener instead of conflicting with each other.
+	alt := redirectHTTPSService()
+	alt.Port = "8443"
+	both := expandHTTPRedirects([]*apptypes.ContainerService{redirectHTTPSService(), alt}, "tail1234.ts.net")
+	if len(both) != 3 {
+		t.Fatalf("two redirecting ports: got %d services, want 3", len(both))
+	}
+	if _, conflicts := buildDesiredServiceMap(both); len(conflicts) != 0 {
+		t.Errorf("two redirecting ports of one container conflict: %v", conflicts)
+	}
 }
 
 func TestParseManagedServicesRedirect(t *testing.T) {
@@ -137,7 +150,7 @@ func (f *fakeLocalAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	path := filepath.Join(f.dir, "serve.json")
-	etag := func() string { return `"v` + string(rune('0'+f.version)) + `"` }
+	etag := func() string { return `"v` + strconv.Itoa(f.version) + `"` }
 	switch r.Method {
 	case http.MethodGet:
 		data, _ := os.ReadFile(path) //nolint:gosec // G304: test fixture in t.TempDir.

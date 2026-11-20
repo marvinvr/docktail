@@ -539,16 +539,17 @@ func sortedConflictKeys(conflicts map[string][]string) []string {
 // serviceDef is the deduplicated, per-service-name view of the desired state
 // that gets synced to the Control Plane.
 type serviceDef struct {
-	Tags        []string
-	Ports       []string
-	Description string
+	Tags               []string
+	Ports              []string
+	Description        string
+	DefaultDescription string // image-derived fallback, see SyncServiceDefinition
 }
 
 // aggregateServiceDefinitions deduplicates the desired services by name,
 // aggregating all ports per service and carrying the tags and description.
 // A container can define several services (primary + indexed) and several
 // containers can back the same service name, so ports are merged and the first
-// non-empty description wins.
+// non-empty description (and default description) wins.
 func aggregateServiceDefinitions(services []*apptypes.ContainerService) map[string]*serviceDef {
 	uniqueServices := make(map[string]*serviceDef)
 
@@ -558,10 +559,15 @@ func aggregateServiceDefinitions(services []*apptypes.ContainerService) map[stri
 		}
 		def, exists := uniqueServices[svc.ServiceName]
 		if !exists {
-			def = &serviceDef{Tags: svc.Tags, Description: svc.ServiceDescription}
+			def = &serviceDef{Tags: svc.Tags, Description: svc.ServiceDescription, DefaultDescription: svc.DefaultDescription}
 			uniqueServices[svc.ServiceName] = def
-		} else if def.Description == "" {
-			def.Description = svc.ServiceDescription
+		} else {
+			if def.Description == "" {
+				def.Description = svc.ServiceDescription
+			}
+			if def.DefaultDescription == "" {
+				def.DefaultDescription = svc.DefaultDescription
+			}
 		}
 		// Add port if not already present
 		found := false
@@ -589,7 +595,7 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 
 	var failed []string
 	for name, def := range uniqueServices {
-		if err := c.SyncServiceDefinition(ctx, name, def.Tags, def.Ports, def.Description); err != nil {
+		if err := c.SyncServiceDefinition(ctx, name, def.Tags, def.Ports, def.Description, def.DefaultDescription); err != nil {
 			failed = append(failed, name)
 			log.Error().
 				Err(err).
@@ -612,11 +618,15 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 // reconciles tags and the description (the admin-panel "comment"): labels are
 // the source of truth, so manual edits to either are overwritten on the next
 // run (issue #63). An empty desired tag set or description means "nothing
-// declared" and leaves the existing value alone. Ports and addrs are never
+// declared" and leaves the existing value alone. defaultDescription (derived
+// from the image when no description label exists) is weaker: it is used on
+// creation and fills an empty comment or one that names an older version of
+// the same image, but never replaces a comment written in the admin panel.
+// Ports and addrs are never
 // touched on existing services: the definition is tailnet-global and other
 // hosts may back the same service, so no single instance knows the full
 // desired port set.
-func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, tags []string, ports []string, description string) error {
+func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, tags []string, ports []string, description, defaultDescription string) error {
 	if !strings.HasPrefix(serviceName, "svc:") {
 		serviceName = "svc:" + serviceName
 	}
@@ -628,6 +638,9 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 	}
 
 	if existing != nil {
+		if description == "" && defaultDescription != "" && isReplaceableComment(existing.Comment, defaultDescription) {
+			description = defaultDescription
+		}
 		tagsDrifted := len(tags) > 0 && !sameStringSet(existing.Tags, tags)
 		descriptionDrifted := description != "" && existing.Comment != description
 
@@ -670,6 +683,9 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 	}
 
 	// Service doesn't exist, create it
+	if description == "" {
+		description = defaultDescription
+	}
 	log.Info().
 		Str("service", serviceName).
 		Strs("tags", tags).
@@ -1148,4 +1164,22 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// isReplaceableComment reports whether an image-derived default description
+// may overwrite an existing admin-panel comment: only when the comment is
+// empty or is the same image at another version (e.g. "nginx:1.27" when the
+// default is now "nginx:1.31"), so an image upgrade refreshes the default it
+// set earlier while any hand-written comment is kept.
+func isReplaceableComment(comment, defaultDescription string) bool {
+	return comment == "" || imageName(comment) == imageName(defaultDescription)
+}
+
+// imageName strips the tag (":version") from an image reference or OCI
+// "title:version", leaving a registry port ("host:5000/app") intact.
+func imageName(ref string) string {
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		return ref[:i]
+	}
+	return ref
 }

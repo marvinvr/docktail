@@ -7,6 +7,7 @@ type ContainerService struct {
 	ServiceEnabled     bool
 	ServiceName        string
 	ServiceDescription string   // Human-readable Service description synced to the Tailscale Control Plane (admin panel "comment")
+	DefaultDescription string   // Image-derived fallback, set only without a description label; never replaces a manual comment
 	Port               string   // Tailscale service port (e.g., "443")
 	TargetPort         string   // Container/host port to proxy to (e.g., "9080")
 	ServiceProtocol    string   // Protocol Tailscale uses (e.g., "https", "http", "tcp")

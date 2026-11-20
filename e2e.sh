@@ -1133,8 +1133,8 @@ fi
 # Simulate a manual console edit by rewriting svc:e2e-custom-tags with a stale
 # tag set plus a manual comment, then assert DockTail converges the tags back
 # to the label-declared set. The container declares no description label, so
-# the manual comment must survive the tag update (an empty declared value
-# means DockTail leaves the existing one alone).
+# the manual comment must survive the tag update: the image-derived default
+# (nginx:1.31-alpine) only fills an empty comment, never a hand-written one.
 
 log "15. Authoritative Tag Reconciliation (issue #63)"
 

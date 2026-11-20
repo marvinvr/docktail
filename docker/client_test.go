@@ -406,23 +406,25 @@ func TestParseHTTPRedirect(t *testing.T) {
 
 func TestResolveDescription(t *testing.T) {
 	tests := []struct {
-		name   string
-		labels map[string]string
-		image  string
-		want   string
+		name         string
+		labels       map[string]string
+		image        string
+		wantDeclared string
+		wantFallback string
 	}{
-		{name: "label wins", labels: map[string]string{apptypes.LabelDescription: "Media"}, image: "nginx:1.27", want: "Media"},
-		{name: "empty label opts out", labels: map[string]string{apptypes.LabelDescription: ""}, image: "nginx:1.27", want: ""},
-		{name: "OCI title and version", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin", ocispec.AnnotationVersion: "10.10.3"}, image: "jellyfin/jellyfin:latest", want: "Jellyfin:10.10.3"},
-		{name: "OCI title only", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin"}, image: "jellyfin/jellyfin:latest", want: "Jellyfin"},
-		{name: "image tag without digest", image: "nginx:1.27@sha256:abc", want: "nginx:1.27"},
-		{name: "bare image ID is blank", image: "sha256:abc", want: ""},
+		{name: "label wins", labels: map[string]string{apptypes.LabelDescription: "Media"}, image: "nginx:1.27", wantDeclared: "Media"},
+		{name: "empty label opts out", labels: map[string]string{apptypes.LabelDescription: ""}, image: "nginx:1.27"},
+		{name: "OCI title and version", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin", ocispec.AnnotationVersion: "10.10.3"}, image: "jellyfin/jellyfin:latest", wantFallback: "Jellyfin:10.10.3"},
+		{name: "OCI title only", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin"}, image: "jellyfin/jellyfin:latest", wantFallback: "Jellyfin"},
+		{name: "image tag without digest", image: "nginx:1.27@sha256:abc", wantFallback: "nginx:1.27"},
+		{name: "bare image ID is blank", image: "sha256:abc"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resolveDescription(tt.labels, apptypes.LabelDescription, tt.image); got != tt.want {
-				t.Errorf("resolveDescription() = %q, want %q", got, tt.want)
+			declared, fallback := resolveDescription(tt.labels, apptypes.LabelDescription, tt.image)
+			if declared != tt.wantDeclared || fallback != tt.wantFallback {
+				t.Errorf("resolveDescription() = (%q, %q), want (%q, %q)", declared, fallback, tt.wantDeclared, tt.wantFallback)
 			}
 		})
 	}

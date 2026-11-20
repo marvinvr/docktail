@@ -76,10 +76,19 @@ func redirectWebKey(serviceName, port, magicDNSSuffix string) string {
 // port sync (new definitions get tcp:80) and stale-endpoint removal.
 func expandHTTPRedirects(desired []*apptypes.ContainerService, magicDNSSuffix string) []*apptypes.ContainerService {
 	out := desired
+	// One container asking for a redirect on several HTTPS ports of the same
+	// service still gets a single port-80 listener (the first port wins), not
+	// a conflict with itself.
+	seen := map[string]struct{}{}
 	for _, svc := range desired {
 		if !svc.ServiceEnabled || !svc.HTTPRedirect || svc.ServiceProtocol != "https" {
 			continue
 		}
+		key := svc.ContainerName + "\x00" + svc.ServiceName
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
 		if len(out) == len(desired) {
 			out = append([]*apptypes.ContainerService(nil), desired...)
 		}
@@ -89,6 +98,7 @@ func expandHTTPRedirects(desired []*apptypes.ContainerService, magicDNSSuffix st
 			ServiceEnabled:     true,
 			ServiceName:        svc.ServiceName,
 			ServiceDescription: svc.ServiceDescription,
+			DefaultDescription: svc.DefaultDescription,
 			Port:               httpRedirectPort,
 			ServiceProtocol:    "http",
 			ServicePath:        "/",
@@ -264,7 +274,7 @@ func getServeConfig(ctx context.Context, httpClient *http.Client) (map[string]an
 	if err != nil {
 		return nil, "", fmt.Errorf("read serve config: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
 		return nil, "", fmt.Errorf("read serve config: %w", err)
@@ -302,12 +312,12 @@ func postServeConfig(ctx context.Context, httpClient *http.Client, cfg map[strin
 	if err != nil {
 		return fmt.Errorf("write serve config: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	switch {
-	case resp.StatusCode == http.StatusOK:
+	switch resp.StatusCode {
+	case http.StatusOK:
 		return nil
-	case resp.StatusCode == http.StatusPreconditionFailed:
+	case http.StatusPreconditionFailed:
 		return errServeConfigChanged
 	default:
 		return localAPIError("write serve config", resp.StatusCode, body)
