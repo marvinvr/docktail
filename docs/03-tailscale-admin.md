@@ -55,7 +55,7 @@ API keys can also be loaded from `FILE__TAILSCALE_API_KEY` or `TAILSCALE_API_KEY
 
 ### Manual Mode
 
-DockTail can run without credentials. It advertises services locally through the Tailscale CLI, but you must manually create service definitions in the Tailscale Admin Console and configure ACL auto-approvers. Without credentials, DockTail Cloud also cannot report tailnet health, since it has no way to read the control plane.
+DockTail can run without credentials. It advertises services locally through the Tailscale CLI, but you must manually create service definitions in the Tailscale Admin Console and configure ACL auto-approvers. For an HTTPS service, also allow `tcp:80` so its [HTTP-to-HTTPS redirect](04-labels.md#http-to-https-redirect) can answer (or turn the redirect off). Without credentials, DockTail Cloud also cannot report tailnet health, since it has no way to read the control plane.
 
 ### ACL Configuration
 

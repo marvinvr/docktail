@@ -111,7 +111,7 @@ func parseManagedServices(status TailscaleStatus) map[string]ServiceEndpoint {
 		// Parse TCP config to get port, protocol and destination
 		for port, tcpConfig := range svcConfig.TCP {
 			protocol := serviceProtocol(tcpConfig)
-			path, destination := serviceHandler(svcConfig, port, tcpConfig)
+			path, destination, redirect := serviceHandler(svcConfig, port, tcpConfig)
 
 			// Create a unique key for this service+port combination
 			key := fmt.Sprintf("%s:%s", serviceName, port)
@@ -123,6 +123,7 @@ func parseManagedServices(status TailscaleStatus) map[string]ServiceEndpoint {
 				Path:          path,
 				Destination:   destination,
 				ProxyProtocol: tcpConfig.ProxyProtocol,
+				Redirect:      redirect,
 			}
 
 			log.Debug().
@@ -158,24 +159,31 @@ func serviceProtocol(tcpConfig TailscaleTCPConfig) string {
 // the destination was only read from the Web section, which is empty for plain
 // TCP services; that left their destination empty and made reconciliation treat
 // every TCP service as changed, re-adding it on each cycle (issue #56).
-func serviceHandler(svcConfig TailscaleService, port string, tcpConfig TailscaleTCPConfig) (string, string) {
+// A redirect handler (docktail.service.http-redirect) has no destination; its
+// target is returned as the third value instead.
+func serviceHandler(svcConfig TailscaleService, port string, tcpConfig TailscaleTCPConfig) (path, destination, redirect string) {
 	if !tcpConfig.HTTP && !tcpConfig.HTTPS {
-		return "", tcpConfig.TCPForward
+		return "", tcpConfig.TCPForward, ""
 	}
 
 	for webKey, webConfig := range svcConfig.Web {
 		// Find the matching port in the web key
-		if strings.Contains(webKey, ":"+port) {
+		if strings.HasSuffix(webKey, ":"+port) {
 			for path, handler := range webConfig.Handlers {
 				if handler.Proxy != "" {
-					return path, handler.Proxy
+					return path, handler.Proxy, ""
+				}
+			}
+			for path, handler := range webConfig.Handlers {
+				if handler.Redirect != "" {
+					return path, "", handler.Redirect
 				}
 			}
 			break
 		}
 	}
 
-	return "", ""
+	return "", "", ""
 }
 
 // serveAddArgs builds `tailscale serve` arguments for advertising one service.

@@ -22,11 +22,18 @@ type TailnetStatus struct {
 	// daemons and a logged-out node report nothing, so an empty value means
 	// "unknown", never "no tailnet".
 	Tailnet string
+	// MagicDNSSuffix is the tailnet's MagicDNS domain (e.g. "tail1234.ts.net"),
+	// the suffix of every Service FQDN. Empty when MagicDNS is off.
+	MagicDNSSuffix string
+	// Version is the tailscaled (not CLI) version, e.g. "1.104.4-t...".
+	Version string
 }
 
 // statusJSON is the subset of `tailscale status --json` (tailscaled's
 // ipnstate.Status) that we parse.
 type statusJSON struct {
+	Version        string         `json:"Version"`
+	MagicDNSSuffix string         `json:"MagicDNSSuffix"`
 	Self           *statusNode    `json:"Self"`
 	CurrentTailnet *statusTailnet `json:"CurrentTailnet"`
 }
@@ -58,7 +65,7 @@ func (c *Client) Status(ctx context.Context) (*TailnetStatus, error) {
 	if err := json.Unmarshal([]byte(stripWarnings(output)), &st); err != nil {
 		return nil, fmt.Errorf("tailscale status: parse json: %w", err)
 	}
-	out := &TailnetStatus{}
+	out := &TailnetStatus{Version: st.Version, MagicDNSSuffix: st.MagicDNSSuffix}
 	if st.Self != nil {
 		out.SelfNodeID = st.Self.ID
 		out.SelfDNSName = strings.TrimSuffix(strings.TrimSpace(st.Self.DNSName), ".")
@@ -68,6 +75,10 @@ func (c *Client) Status(ctx context.Context) (*TailnetStatus, error) {
 		if out.Tailnet == "" {
 			out.Tailnet = st.CurrentTailnet.MagicDNSSuffix
 		}
+		if st.CurrentTailnet.MagicDNSSuffix != "" {
+			out.MagicDNSSuffix = st.CurrentTailnet.MagicDNSSuffix
+		}
 	}
+	out.MagicDNSSuffix = strings.Trim(strings.TrimSpace(out.MagicDNSSuffix), ".")
 	return out, nil
 }

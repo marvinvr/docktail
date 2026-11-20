@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +33,8 @@ type Client struct {
 	managedFunnels       map[string]struct{}
 	ignoredServices      map[string]struct{}
 	deleteUnusedServices bool
+	onceMu               sync.Mutex          // guards logged
+	logged               map[string]struct{} // warnings already logged, see firstTime
 }
 
 // setServerVersion / getServerVersion guard serverVersion so the DockTail Cloud
@@ -130,6 +134,7 @@ type ServiceEndpoint struct {
 	Path          string // HTTP(S) handler path, empty for TCP
 	Destination   string // e.g., "http://localhost:9080"
 	ProxyProtocol int    // 0, 1, or 2 as reported by `tailscale serve status`
+	Redirect      string // HTTP redirect target, set instead of Destination on a redirect endpoint
 }
 
 // TailscaleStatus represents the structure of 'tailscale serve status --json'
@@ -160,7 +165,8 @@ type TailscaleWebConfig struct {
 }
 
 type TailscaleHandler struct {
-	Proxy string `json:"Proxy"`
+	Proxy    string `json:"Proxy"`
+	Redirect string `json:"Redirect"`
 }
 
 // ReconcileServices compares desired services with current services and makes necessary changes
@@ -168,6 +174,10 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	// Re-detect version mismatch each cycle in case tailscaled was updated
 	c.DetectVersionMismatch(ctx)
 	c.WarnIfSocketMissing()
+
+	// Services asking for an HTTP-to-HTTPS redirect get a derived port-80
+	// endpoint, reconciled like any other one from here on.
+	desiredServices, magicDNSSuffix := c.withHTTPRedirects(ctx, desiredServices)
 
 	serviceDesiredCount := 0
 	for _, svc := range desiredServices {
@@ -277,6 +287,10 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	}
 
 	// Find services to remove (in current but not in desired)
+	var keepRedirects map[string]struct{}
+	if magicDNSSuffix == "" {
+		keepRedirects = httpRedirectServiceNames(desiredServices)
+	}
 	for key, current := range currentServices {
 		if _, conflicted := conflictedNames[normalizeServiceName(current.ServiceName)]; conflicted {
 			// Frozen: a newly started container must neither take over nor
@@ -285,6 +299,11 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 			continue
 		}
 		if _, exists := desiredMap[key]; !exists {
+			if _, wanted := keepRedirects[current.ServiceName]; wanted && current.Redirect != "" {
+				// The redirect is still wanted, it just could not be derived
+				// this cycle (see withHTTPRedirects); leave it serving.
+				continue
+			}
 			if c.shouldIgnoreService(current.ServiceName) {
 				log.Info().
 					Str("service", current.ServiceName).
@@ -298,8 +317,12 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 
 	// Config changes advertise through addService. Removals clear whole services.
 	// Neither may be followed by a repair based on the old Serve snapshot.
+	// A redirect is written through the LocalAPI and does not advertise, so
+	// it must not cancel an advertisement repair for its HTTPS sibling.
 	for _, svc := range toAdd {
-		delete(toAdvertise, "svc:"+svc.ServiceName)
+		if svc.RedirectTo == "" {
+			delete(toAdvertise, "svc:"+svc.ServiceName)
+		}
 	}
 	for _, svc := range toRemove {
 		delete(toAdvertise, svc.ServiceName)
@@ -317,6 +340,21 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 			Str("service", svc.ServiceName).
 			Str("port", svc.Port).
 			Msg("Removing service")
+
+		if svc.Redirect != "" {
+			// A redirect is removed on its own, so turning the label off does
+			// not interrupt the service's HTTPS endpoint. Only a service left
+			// without any port is drained and cleared as a whole.
+			empty, err := c.removeHTTPRedirect(ctx, svc)
+			if err != nil {
+				log.Error().Err(err).Str("service", svc.ServiceName).Msg("Failed to remove HTTP redirect")
+				continue
+			}
+			if !empty {
+				log.Info().Str("key", key).Str("service", svc.ServiceName).Msg("Successfully removed HTTP redirect")
+				continue
+			}
+		}
 
 		if err := c.removeService(ctx, svc.ServiceName); err != nil {
 			log.Error().
@@ -378,7 +416,13 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 			Str("backend_port", svc.TargetPort).
 			Msg("Adding service")
 
-		if err := c.addService(ctx, svc); err != nil {
+		var err error
+		if svc.RedirectTo != "" {
+			err = c.setHTTPRedirect(ctx, svc, magicDNSSuffix)
+		} else {
+			err = c.addService(ctx, svc)
+		}
+		if err != nil {
 			failCount++
 			log.Error().
 				Err(err).
@@ -499,16 +543,20 @@ func sortedConflictKeys(conflicts map[string][]string) []string {
 // serviceDef is the deduplicated, per-service-name view of the desired state
 // that gets synced to the Control Plane.
 type serviceDef struct {
-	Tags        []string
-	Ports       []string
-	Description string
+	Tags               []string
+	Ports              []string
+	Description        string
+	DefaultDescription string // image-derived fallback, see SyncServiceDefinition
+	// RequiredPorts must be allowed by an existing definition too: the
+	// derived HTTP redirect port, which DockTail adds when it is missing.
+	RequiredPorts []string
 }
 
 // aggregateServiceDefinitions deduplicates the desired services by name,
 // aggregating all ports per service and carrying the tags and description.
 // A container can define several services (primary + indexed) and several
 // containers can back the same service name, so ports are merged and the first
-// non-empty description wins.
+// non-empty description (and default description) wins.
 func aggregateServiceDefinitions(services []*apptypes.ContainerService) map[string]*serviceDef {
 	uniqueServices := make(map[string]*serviceDef)
 
@@ -518,10 +566,15 @@ func aggregateServiceDefinitions(services []*apptypes.ContainerService) map[stri
 		}
 		def, exists := uniqueServices[svc.ServiceName]
 		if !exists {
-			def = &serviceDef{Tags: svc.Tags, Description: svc.ServiceDescription}
+			def = &serviceDef{Tags: svc.Tags, Description: svc.ServiceDescription, DefaultDescription: svc.DefaultDescription}
 			uniqueServices[svc.ServiceName] = def
-		} else if def.Description == "" {
-			def.Description = svc.ServiceDescription
+		} else {
+			if def.Description == "" {
+				def.Description = svc.ServiceDescription
+			}
+			if def.DefaultDescription == "" {
+				def.DefaultDescription = svc.DefaultDescription
+			}
 		}
 		// Add port if not already present
 		found := false
@@ -533,6 +586,9 @@ func aggregateServiceDefinitions(services []*apptypes.ContainerService) map[stri
 		}
 		if !found {
 			def.Ports = append(def.Ports, svc.Port)
+		}
+		if svc.RedirectTo != "" && !slices.Contains(def.RequiredPorts, svc.Port) {
+			def.RequiredPorts = append(def.RequiredPorts, svc.Port)
 		}
 	}
 
@@ -549,7 +605,7 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 
 	var failed []string
 	for name, def := range uniqueServices {
-		if err := c.SyncServiceDefinition(ctx, name, def.Tags, def.Ports, def.Description); err != nil {
+		if err := c.syncServiceDefinition(ctx, name, def); err != nil {
 			failed = append(failed, name)
 			log.Error().
 				Err(err).
@@ -572,11 +628,25 @@ func (c *Client) syncServiceDefinitions(ctx context.Context, services []*apptype
 // reconciles tags and the description (the admin-panel "comment"): labels are
 // the source of truth, so manual edits to either are overwritten on the next
 // run (issue #63). An empty desired tag set or description means "nothing
-// declared" and leaves the existing value alone. Ports and addrs are never
+// declared" and leaves the existing value alone. defaultDescription (derived
+// from the image when no description label exists) is weaker: it is used on
+// creation and fills an empty comment or one that names an older version of
+// the same image, but never replaces a comment written in the admin panel.
+// Ports and addrs are never
 // touched on existing services: the definition is tailnet-global and other
 // hosts may back the same service, so no single instance knows the full
 // desired port set.
-func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, tags []string, ports []string, description string) error {
+//
+// The one exception to "ports are never touched" is additive: a port in
+// RequiredPorts (the derived HTTP redirect port) that the existing definition
+// does not allow is appended, since DockTail itself serves it on this host and
+// it would be unreachable otherwise. No port is ever removed.
+func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, tags []string, ports []string, description, defaultDescription string) error {
+	return c.syncServiceDefinition(ctx, serviceName, &serviceDef{Tags: tags, Ports: ports, Description: description, DefaultDescription: defaultDescription})
+}
+
+func (c *Client) syncServiceDefinition(ctx context.Context, serviceName string, def *serviceDef) error {
+	tags, ports, description, defaultDescription := def.Tags, def.Ports, def.Description, def.DefaultDescription
 	if !strings.HasPrefix(serviceName, "svc:") {
 		serviceName = "svc:" + serviceName
 	}
@@ -588,10 +658,19 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 	}
 
 	if existing != nil {
+		if description == "" && defaultDescription != "" && isReplaceableComment(existing.Comment, defaultDescription) {
+			description = defaultDescription
+		}
 		tagsDrifted := len(tags) > 0 && !sameStringSet(existing.Tags, tags)
 		descriptionDrifted := description != "" && existing.Comment != description
+		var missingPorts []string
+		for _, p := range def.RequiredPorts {
+			if !definitionAllowsPort(existing.Ports, p) {
+				missingPorts = append(missingPorts, "tcp:"+p)
+			}
+		}
 
-		if !tagsDrifted && !descriptionDrifted {
+		if !tagsDrifted && !descriptionDrifted && len(missingPorts) == 0 {
 			log.Debug().
 				Str("service", serviceName).
 				Strs("existing_tags", existing.Tags).
@@ -619,17 +698,29 @@ func (c *Client) SyncServiceDefinition(ctx context.Context, serviceName string, 
 				Msg("Updating service description in Control Plane")
 		}
 
+		desiredPorts := existing.Ports
+		if len(missingPorts) > 0 {
+			desiredPorts = append(append([]string(nil), existing.Ports...), missingPorts...)
+			log.Info().
+				Str("service", serviceName).
+				Strs("added_ports", missingPorts).
+				Msg("Adding the HTTP redirect port to the Service definition")
+		}
+
 		payload := map[string]interface{}{
 			"name":    serviceName,
 			"addrs":   existing.Addrs,
 			"tags":    desiredTags,
-			"ports":   existing.Ports,
+			"ports":   desiredPorts,
 			"comment": comment,
 		}
 		return c.putService(ctx, serviceName, payload)
 	}
 
 	// Service doesn't exist, create it
+	if description == "" {
+		description = defaultDescription
+	}
 	log.Info().
 		Str("service", serviceName).
 		Strs("tags", tags).
@@ -1108,4 +1199,50 @@ func (c *Client) CleanupAllServices(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// isReplaceableComment reports whether an image-derived default description
+// may overwrite an existing admin-panel comment: only when the comment is
+// empty or is the same image at another version (e.g. "nginx:1.27" when the
+// default is now "nginx:1.31"), so an image upgrade refreshes the default it
+// set earlier while any hand-written comment is kept.
+func isReplaceableComment(comment, defaultDescription string) bool {
+	return comment == "" || imageName(comment) == imageName(defaultDescription)
+}
+
+// imageName strips the tag (":version") from an image reference or OCI
+// "title:version", leaving a registry port ("host:5000/app") intact.
+func imageName(ref string) string {
+	if i := strings.LastIndex(ref, ":"); i > strings.LastIndex(ref, "/") {
+		return ref[:i]
+	}
+	return ref
+}
+
+// definitionAllowsPort reports whether a Service definition's port list
+// ("tcp:443", "tcp:8000-8100", "tcp:*") allows TCP port port.
+func definitionAllowsPort(ports []string, port string) bool {
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return slices.Contains(ports, "tcp:"+port)
+	}
+	for _, entry := range ports {
+		spec, ok := strings.CutPrefix(entry, "tcp:")
+		if !ok {
+			continue
+		}
+		if spec == "*" {
+			return true
+		}
+		lo, hi, isRange := strings.Cut(spec, "-")
+		if !isRange {
+			hi = lo
+		}
+		a, errA := strconv.Atoi(lo)
+		b, errB := strconv.Atoi(hi)
+		if errA == nil && errB == nil && a <= n && n <= b {
+			return true
+		}
+	}
+	return false
 }

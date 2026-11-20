@@ -365,25 +365,71 @@ func TestParseServicePath(t *testing.T) {
 	}
 }
 
-func TestResolveDescription(t *testing.T) {
+func TestParseHTTPRedirect(t *testing.T) {
 	tests := []struct {
-		name   string
-		labels map[string]string
-		image  string
-		want   string
+		name            string
+		value           string
+		serviceProtocol string
+		servicePort     string
+		want            bool
+		wantError       bool
 	}{
-		{name: "label wins", labels: map[string]string{apptypes.LabelDescription: "Media"}, image: "nginx:1.27", want: "Media"},
-		{name: "empty label opts out", labels: map[string]string{apptypes.LabelDescription: ""}, image: "nginx:1.27", want: ""},
-		{name: "OCI title and version", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin", ocispec.AnnotationVersion: "10.10.3"}, image: "jellyfin/jellyfin:latest", want: "Jellyfin:10.10.3"},
-		{name: "OCI title only", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin"}, image: "jellyfin/jellyfin:latest", want: "Jellyfin"},
-		{name: "image tag without digest", image: "nginx:1.27@sha256:abc", want: "nginx:1.27"},
-		{name: "bare image ID is blank", image: "sha256:abc", want: ""},
+		{name: "unset is on for https", serviceProtocol: "https", servicePort: "443", want: true},
+		{name: "unset is on for custom https port", serviceProtocol: "https", servicePort: "8443", want: true},
+		{name: "unset is off for https on port 80", serviceProtocol: "https", servicePort: "80"},
+		{name: "unset on http is off", serviceProtocol: "http", servicePort: "80"},
+		{name: "unset on tcp is off", serviceProtocol: "tcp", servicePort: "443"},
+		{name: "false opts out on https", value: "false", serviceProtocol: "https", servicePort: "443"},
+		{name: "blank opts nothing out", value: "  ", serviceProtocol: "https", servicePort: "443", want: true},
+		{name: "true on https", value: "true", serviceProtocol: "https", servicePort: "443", want: true},
+		{name: "true on custom https port", value: " TRUE ", serviceProtocol: "https", servicePort: "8443", want: true},
+		{name: "false on http is accepted", value: "false", serviceProtocol: "http", servicePort: "80"},
+		{name: "rejects garbage", value: "yes please", serviceProtocol: "https", servicePort: "443", wantError: true},
+		{name: "rejects http", value: "true", serviceProtocol: "http", servicePort: "8080", wantError: true},
+		{name: "rejects tcp", value: "true", serviceProtocol: "tcp", servicePort: "443", wantError: true},
+		{name: "rejects https on port 80", value: "true", serviceProtocol: "https", servicePort: "80", wantError: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := resolveDescription(tt.labels, apptypes.LabelDescription, tt.image); got != tt.want {
-				t.Errorf("resolveDescription() = %q, want %q", got, tt.want)
+			got, err := parseHTTPRedirect(tt.value, tt.serviceProtocol, tt.servicePort)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("parseHTTPRedirect() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveDescription(t *testing.T) {
+	tests := []struct {
+		name         string
+		labels       map[string]string
+		image        string
+		wantDeclared string
+		wantFallback string
+	}{
+		{name: "label wins", labels: map[string]string{apptypes.LabelDescription: "Media"}, image: "nginx:1.27", wantDeclared: "Media"},
+		{name: "empty label opts out", labels: map[string]string{apptypes.LabelDescription: ""}, image: "nginx:1.27"},
+		{name: "OCI title and version", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin", ocispec.AnnotationVersion: "10.10.3"}, image: "jellyfin/jellyfin:latest", wantFallback: "Jellyfin:10.10.3"},
+		{name: "OCI title only", labels: map[string]string{ocispec.AnnotationTitle: "Jellyfin"}, image: "jellyfin/jellyfin:latest", wantFallback: "Jellyfin"},
+		{name: "image tag without digest", image: "nginx:1.27@sha256:abc", wantFallback: "nginx:1.27"},
+		{name: "bare image ID is blank", image: "sha256:abc"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			declared, fallback := resolveDescription(tt.labels, apptypes.LabelDescription, tt.image)
+			if declared != tt.wantDeclared || fallback != tt.wantFallback {
+				t.Errorf("resolveDescription() = (%q, %q), want (%q, %q)", declared, fallback, tt.wantDeclared, tt.wantFallback)
 			}
 		})
 	}
