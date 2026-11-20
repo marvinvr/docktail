@@ -87,6 +87,8 @@ Tailscale-facing `docktail.service.service-protocol` values:
 
 `docktail.service.path` selects the HTTP(S) Serve mount point and defaults to `/`. It must start with `/` and is rejected for TCP protocols.
 
+`docktail.service.http-redirect=true` is valid only with `https` on a `service-port` other than `80`. It adds a plain-HTTP listener on port `80` that redirects to the HTTPS endpoint; see [HTTP To HTTPS Redirect](04-labels.md#http-to-https-redirect).
+
 `docktail.service.proxy-protocol` (`1` or `2`) is valid only with `tcp` or `tls-terminated-tcp`. It is off by default because the backend must understand the PROXY header. HTTP/HTTPS values are rejected.
 
 Container-facing `docktail.service.protocol` values:

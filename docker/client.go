@@ -325,6 +325,31 @@ func parseProxyProtocol(value, serviceProtocol string) (int, error) {
 	}
 }
 
+// parseHTTPRedirect validates docktail.service.http-redirect. Empty means off.
+// The redirect answers plain HTTP on port 80 of the same service and points at
+// its HTTPS endpoint, so it only makes sense for service-protocol https on a
+// port other than 80; anything else is rejected instead of silently ignored.
+func parseHTTPRedirect(value, serviceProtocol, servicePort string) (bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false, nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s: %q (must be true or false)", apptypes.LabelHTTPRedirect, value)
+	}
+	if !enabled {
+		return false, nil
+	}
+	if serviceProtocol != "https" {
+		return false, fmt.Errorf("%s is only supported for service-protocol https, not %s", apptypes.LabelHTTPRedirect, serviceProtocol)
+	}
+	if servicePort == "80" {
+		return false, fmt.Errorf("%s needs the HTTPS service-port to differ from 80, the port the redirect listens on", apptypes.LabelHTTPRedirect)
+	}
+	return true, nil
+}
+
 // parseServicePath validates docktail.service.path. HTTP/HTTPS services use
 // the root handler by default. TCP forwarding has no URL handler, so declaring
 // a path there is an error rather than a silently ignored label.
@@ -893,6 +918,10 @@ func (c *Client) parseContainerServices(ctx context.Context, containerID string,
 		if err != nil {
 			return nil, err
 		}
+		httpRedirect, err := parseHTTPRedirect(labels[apptypes.LabelHTTPRedirect], serviceProtocol, port)
+		if err != nil {
+			return nil, err
+		}
 
 		primary := &apptypes.ContainerService{
 			ContainerID:        cctx.containerID[:12],
@@ -906,6 +935,7 @@ func (c *Client) parseContainerServices(ctx context.Context, containerID string,
 			ServicePath:        servicePath,
 			Protocol:           protocol,
 			ProxyProtocol:      proxyProtocol,
+			HTTPRedirect:       httpRedirect,
 			Tags:               cctx.tags,
 			IPAddress:          destIP,
 			MonitorIP:          monIP,
@@ -1055,6 +1085,16 @@ func (c *Client) parseIndexedPorts(
 				Msg("Invalid path for indexed service, skipping")
 			continue
 		}
+		idxHTTPRedirect, err := parseHTTPRedirect(labels[prefix+"http-redirect"], serviceProtocol, servicePort)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("container", cctx.containerName).
+				Str("service", idxServiceName).
+				Int("index", idx).
+				Msg("Invalid http-redirect for indexed service, skipping")
+			continue
+		}
 
 		// Check for duplicate service name + port combo
 		dedupKey := idxServiceName + ":" + servicePort
@@ -1103,6 +1143,7 @@ func (c *Client) parseIndexedPorts(
 			ServicePath:        idxServicePath,
 			Protocol:           protocol,
 			ProxyProtocol:      idxProxyProtocol,
+			HTTPRedirect:       idxHTTPRedirect,
 			Tags:               cctx.tags,
 			IPAddress:          idxDestIP,
 			MonitorIP:          monIP,

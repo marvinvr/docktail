@@ -29,7 +29,15 @@ type ContainerService struct {
 	// TCP forwards (1 or 2). Zero means the header is not sent. Only valid
 	// with service-protocol tcp or tls-terminated-tcp; HTTP/HTTPS
 	// service-protocol must not set this, or Tailscale serve rejects the config.
-	ProxyProtocol    int
+	ProxyProtocol int
+	// HTTPRedirect asks for a plain-HTTP listener on port 80 of the same
+	// service that redirects every request to this HTTPS endpoint. Only valid
+	// with service-protocol https.
+	HTTPRedirect bool
+	// RedirectTo is set only on the port-80 endpoint the Tailscale reconciler
+	// derives from an HTTPRedirect service, never by label parsing. It is the
+	// Serve redirect target, e.g. "308:https://web.tail1234.ts.net${REQUEST_URI}".
+	RedirectTo       string
 	FunnelEnabled    bool   // Enable Tailscale Funnel (public internet access)
 	FunnelPort       string // Container port for funnel (separate from service port)
 	FunnelTargetPort string // Host port that maps to FunnelPort
@@ -64,6 +72,7 @@ const (
 	LabelTarget           = "docktail.service.port"
 	LabelTargetProtocol   = "docktail.service.protocol"
 	LabelProxyProtocol    = "docktail.service.proxy-protocol"
+	LabelHTTPRedirect     = "docktail.service.http-redirect" // "true": redirect http:// on port 80 to the HTTPS endpoint
 	LabelTags             = "docktail.tags"
 	LabelFunnelEnable     = "docktail.funnel.enable"
 	LabelFunnelPort       = "docktail.funnel.port"        // Container port (like service.port)

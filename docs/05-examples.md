@@ -53,6 +53,8 @@ services:
 
 Access it at `https://api.your-tailnet.ts.net`.
 
+Add `"docktail.service.http-redirect=true"` to also redirect `http://api` and `http://api.your-tailnet.ts.net` to that HTTPS address; see [HTTP To HTTPS Redirect](04-labels.md#http-to-https-redirect) for the requirements.
+
 ### HTTPS with TCP (SSH)
 
 ```yaml

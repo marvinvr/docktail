@@ -365,6 +365,45 @@ func TestParseServicePath(t *testing.T) {
 	}
 }
 
+func TestParseHTTPRedirect(t *testing.T) {
+	tests := []struct {
+		name            string
+		value           string
+		serviceProtocol string
+		servicePort     string
+		want            bool
+		wantError       bool
+	}{
+		{name: "unset is off", serviceProtocol: "https", servicePort: "443"},
+		{name: "unset on http is off", serviceProtocol: "http", servicePort: "80"},
+		{name: "true on https", value: "true", serviceProtocol: "https", servicePort: "443", want: true},
+		{name: "true on custom https port", value: " TRUE ", serviceProtocol: "https", servicePort: "8443", want: true},
+		{name: "false on http is accepted", value: "false", serviceProtocol: "http", servicePort: "80"},
+		{name: "rejects garbage", value: "yes please", serviceProtocol: "https", servicePort: "443", wantError: true},
+		{name: "rejects http", value: "true", serviceProtocol: "http", servicePort: "8080", wantError: true},
+		{name: "rejects tcp", value: "true", serviceProtocol: "tcp", servicePort: "443", wantError: true},
+		{name: "rejects https on port 80", value: "true", serviceProtocol: "https", servicePort: "80", wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseHTTPRedirect(tt.value, tt.serviceProtocol, tt.servicePort)
+			if tt.wantError {
+				if err == nil {
+					t.Fatal("expected error but got nil")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("parseHTTPRedirect() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveDescription(t *testing.T) {
 	tests := []struct {
 		name   string

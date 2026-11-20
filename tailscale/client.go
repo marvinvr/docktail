@@ -130,6 +130,7 @@ type ServiceEndpoint struct {
 	Path          string // HTTP(S) handler path, empty for TCP
 	Destination   string // e.g., "http://localhost:9080"
 	ProxyProtocol int    // 0, 1, or 2 as reported by `tailscale serve status`
+	Redirect      string // HTTP redirect target, set instead of Destination on a redirect endpoint
 }
 
 // TailscaleStatus represents the structure of 'tailscale serve status --json'
@@ -160,7 +161,8 @@ type TailscaleWebConfig struct {
 }
 
 type TailscaleHandler struct {
-	Proxy string `json:"Proxy"`
+	Proxy    string `json:"Proxy"`
+	Redirect string `json:"Redirect"`
 }
 
 // ReconcileServices compares desired services with current services and makes necessary changes
@@ -168,6 +170,10 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	// Re-detect version mismatch each cycle in case tailscaled was updated
 	c.DetectVersionMismatch(ctx)
 	c.WarnIfSocketMissing()
+
+	// Services asking for an HTTP-to-HTTPS redirect get a derived port-80
+	// endpoint, reconciled like any other one from here on.
+	desiredServices, magicDNSSuffix := c.withHTTPRedirects(ctx, desiredServices)
 
 	serviceDesiredCount := 0
 	for _, svc := range desiredServices {
@@ -277,6 +283,10 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 	}
 
 	// Find services to remove (in current but not in desired)
+	var keepRedirects map[string]struct{}
+	if magicDNSSuffix == "" {
+		keepRedirects = httpRedirectServiceNames(desiredServices)
+	}
 	for key, current := range currentServices {
 		if _, conflicted := conflictedNames[normalizeServiceName(current.ServiceName)]; conflicted {
 			// Frozen: a newly started container must neither take over nor
@@ -285,6 +295,11 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 			continue
 		}
 		if _, exists := desiredMap[key]; !exists {
+			if _, wanted := keepRedirects[current.ServiceName]; wanted && current.Redirect != "" {
+				// The redirect is still wanted, it just could not be derived
+				// this cycle (see withHTTPRedirects); leave it serving.
+				continue
+			}
 			if c.shouldIgnoreService(current.ServiceName) {
 				log.Info().
 					Str("service", current.ServiceName).
@@ -298,8 +313,12 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 
 	// Config changes advertise through addService. Removals clear whole services.
 	// Neither may be followed by a repair based on the old Serve snapshot.
+	// A redirect is written through the LocalAPI and does not advertise, so
+	// it must not cancel an advertisement repair for its HTTPS sibling.
 	for _, svc := range toAdd {
-		delete(toAdvertise, "svc:"+svc.ServiceName)
+		if svc.RedirectTo == "" {
+			delete(toAdvertise, "svc:"+svc.ServiceName)
+		}
 	}
 	for _, svc := range toRemove {
 		delete(toAdvertise, svc.ServiceName)
@@ -317,6 +336,21 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 			Str("service", svc.ServiceName).
 			Str("port", svc.Port).
 			Msg("Removing service")
+
+		if svc.Redirect != "" {
+			// A redirect is removed on its own, so turning the label off does
+			// not interrupt the service's HTTPS endpoint. Only a service left
+			// without any port is drained and cleared as a whole.
+			empty, err := c.removeHTTPRedirect(ctx, svc)
+			if err != nil {
+				log.Error().Err(err).Str("service", svc.ServiceName).Msg("Failed to remove HTTP redirect")
+				continue
+			}
+			if !empty {
+				log.Info().Str("key", key).Str("service", svc.ServiceName).Msg("Successfully removed HTTP redirect")
+				continue
+			}
+		}
 
 		if err := c.removeService(ctx, svc.ServiceName); err != nil {
 			log.Error().
@@ -378,7 +412,13 @@ func (c *Client) ReconcileServices(ctx context.Context, desiredServices []*appty
 			Str("backend_port", svc.TargetPort).
 			Msg("Adding service")
 
-		if err := c.addService(ctx, svc); err != nil {
+		var err error
+		if svc.RedirectTo != "" {
+			err = c.setHTTPRedirect(ctx, svc, magicDNSSuffix)
+		} else {
+			err = c.addService(ctx, svc)
+		}
+		if err != nil {
 			failCount++
 			log.Error().
 				Err(err).
