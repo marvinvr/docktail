@@ -7,7 +7,7 @@ title: Quick Start: Expose a Docker Container on Tailscale | DockTail
 
 ### Before you start
 
-- [ ] The Docker host is on your tailnet and tagged `tag:server` (`sudo tailscale up --advertise-tags=tag:server --reset`). On macOS, Windows and many NAS devices, use the [Tailscale sidecar](02-installation.md#tailscale-sidecar) instead.
+- [ ] The Docker host is on your tailnet and tagged `tag:server` (`sudo tailscale up --advertise-tags=tag:server --reset`). On macOS and Windows, use the [Tailscale sidecar](02-installation.md#tailscale-sidecar) instead; for NAS systems, see the [Platform Guides](02-platforms.md#platform-guides).
 - [ ] Your tailnet policy lists `tag:server` and `tag:container` (the default service tag) in `tagOwners`, and `autoApprovers.services` lets `tag:server` advertise `tag:container` services. See [ACL Configuration](03-tailscale-admin.md#acl-configuration).
 - [ ] Recommended: a Tailscale OAuth client for `tag:server` with **Services: Write** and **Devices Core: Write** (plus **Keys Auth Keys: Write** for the sidecar). No broader scope, such as `all`, is needed. Without credentials, you create each service in the admin console yourself. See [OAuth Credentials](03-tailscale-admin.md#oauth-credentials).
 

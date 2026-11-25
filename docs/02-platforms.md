@@ -72,9 +72,14 @@ Make sure the container restarts on its own after it exits; if yours does not, a
 
 ### TrueNAS SCALE
 
-Not tested by the maintainers. TrueNAS SCALE 24.10 (Electric Eel) and later run apps on Docker, so DockTail can be installed as a custom app from YAML. Releases before 24.10 run apps on Kubernetes and are not supported (see [Kubernetes](#kubernetes)).
+Not tested by the maintainers on a real TrueNAS system; the catalog apps only passed the TrueNAS Apps CI render and deploy tests. DockTail is in the TrueNAS Apps catalog (community train) and uses the `tailscaled` of the Tailscale app from the same catalog. TrueNAS SCALE 24.10 (Electric Eel) and later run apps on Docker; earlier releases run apps on Kubernetes and are not supported (see [Kubernetes](#kubernetes)).
 
-Paste the [Tailscale Sidecar](02-installation.md#tailscale-sidecar) Compose file as the custom app's YAML, so DockTail and its `tailscaled` are deployed together. The Docker socket is at `/var/run/docker.sock`. Apps you expose must be reachable from the sidecar: it runs with host networking, which reaches container IPs on the host's Docker networks.
+1. Create an empty directory or dataset for the socket, for example `/mnt/tank/apps/tailscale-socket`. Not the Tailscale app's state path: anything that can reach this directory controls the Tailscale node.
+2. In the Tailscale app (1.4.30 or later), set **Tailscale Socket Storage** (Storage Configuration) to **Host Path** with that directory, and add `--advertise-tags=tag:server` under **Extra Arguments** (Tailscale Configuration): Services need a tagged node ([ACL Configuration](03-tailscale-admin.md#acl-configuration)). Keep **Host Network** on, the default, so the daemon can reach the apps you expose. The tag is applied when the node logs in; if the Tailscale app was already connected, add `tag:server` to the machine in the Tailscale admin console instead.
+3. Install **DockTail** from **Apps → Discover**. Under **Tailscale Credentials** choose **OAuth Client (Recommended)** and enter its ID and secret ([OAuth Credentials](03-tailscale-admin.md#oauth-credentials)), an **API Key**, or **None** for [Manual Mode](03-tailscale-admin.md#manual-mode). Set **Tailscale Socket Storage** to the same host path, and paste your key into **DockTail Cloud Key (Optional)** if you use [DockTail Cloud](06-cloud.md#docktail-cloud).
+4. Add `docktail.*` labels to the apps you want to expose: under **Labels Configuration** in a catalog app's settings (a **Key**, a **Value**, and the app's container under **Containers**), or under `labels:` in a custom app's YAML.
+
+Without the catalog apps, install DockTail as a custom app instead: paste the [Tailscale Sidecar](02-installation.md#tailscale-sidecar) Compose file as the custom app's YAML, so DockTail and its own `tailscaled` are deployed together. The Docker socket is at `/var/run/docker.sock`. Apps you expose must be reachable from the sidecar: it runs with host networking, which reaches container IPs on the host's Docker networks.
 
 ### macOS And Windows
 
