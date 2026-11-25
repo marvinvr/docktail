@@ -131,6 +131,8 @@ labels:
   - "docktail.service.proxy-protocol=2"
 ```
 
+HTTPS services also redirect `http://` to HTTPS by default (needs `tailscaled` 1.92+). Opt out per service with `docktail.service.http-redirect=false`; see [HTTP To HTTPS Redirect](docs/04-labels.md#http-to-https-redirect).
+
 Expose a service publicly with Tailscale Funnel:
 
 ```yaml

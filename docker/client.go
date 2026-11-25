@@ -179,20 +179,30 @@ func (c *Client) GetEnabledContainers(ctx context.Context) ([]*apptypes.Containe
 	return services, nil
 }
 
-// resolveDescription returns a service's description, using the first of:
-//  1. the description label, if set (even empty)
-//  2. the image's OCI "title:version", if both are set
-//  3. the image's OCI "title", if there is no version
-//  4. the image reference, without its digest (e.g. "nginx:1.27")
-//  5. nothing
-func resolveDescription(labels map[string]string, descriptionLabel, image string) string {
-	label, declared := labels[descriptionLabel] // present, even empty: an empty label opts out of the defaults
+// resolveDescription returns a service's declared description and, when the
+// label is absent, the image-derived fallback. The declared description is
+// authoritative (it overwrites the admin-panel comment); the fallback only
+// fills a comment that is empty or an older version of the same image, so a
+// comment written in the admin panel is never replaced by it. The fallback is
+// the first of:
+//  1. the image's OCI "title:version", if both are set
+//  2. the image's OCI "title", if there is no version
+//  3. the image reference, without its digest (e.g. "nginx:1.27")
+//  4. nothing
+//
+// A label that is present but empty declares nothing and disables the fallback.
+func resolveDescription(labels map[string]string, descriptionLabel, image string) (declared, fallback string) {
+	if label, ok := labels[descriptionLabel]; ok {
+		return label, ""
+	}
+	return "", imageDescription(labels, image)
+}
+
+func imageDescription(labels map[string]string, image string) string {
 	title, version := labels[ocispec.AnnotationTitle], labels[ocispec.AnnotationVersion]
 	ref, _, _ := strings.Cut(image, "@")
 
 	switch {
-	case declared:
-		return label
 	case title != "" && version != "":
 		return title + ":" + version
 	case title != "":
@@ -323,6 +333,33 @@ func parseProxyProtocol(value, serviceProtocol string) (int, error) {
 	default:
 		return 0, fmt.Errorf("invalid docktail.service.proxy-protocol: %q (must be 1 or 2)", value)
 	}
+}
+
+// parseHTTPRedirect validates docktail.service.http-redirect. The redirect
+// answers plain HTTP on port 80 of the same service and points at its HTTPS
+// endpoint. Unset, it is on for every service-protocol https endpoint that is
+// not itself on port 80, and off for everything else; "false" opts out. An
+// explicit "true" where a redirect is impossible (not https, or https on port
+// 80) is rejected instead of silently ignored.
+func parseHTTPRedirect(value, serviceProtocol, servicePort string) (bool, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return serviceProtocol == "https" && servicePort != "80", nil
+	}
+	enabled, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s: %q (must be true or false)", apptypes.LabelHTTPRedirect, value)
+	}
+	if !enabled {
+		return false, nil
+	}
+	if serviceProtocol != "https" {
+		return false, fmt.Errorf("%s is only supported for service-protocol https, not %s", apptypes.LabelHTTPRedirect, serviceProtocol)
+	}
+	if servicePort == "80" {
+		return false, fmt.Errorf("%s needs the HTTPS service-port to differ from 80, the port the redirect listens on", apptypes.LabelHTTPRedirect)
+	}
+	return true, nil
 }
 
 // parseServicePath validates docktail.service.path. HTTP/HTTPS services use
@@ -893,19 +930,26 @@ func (c *Client) parseContainerServices(ctx context.Context, containerID string,
 		if err != nil {
 			return nil, err
 		}
+		httpRedirect, err := parseHTTPRedirect(labels[apptypes.LabelHTTPRedirect], serviceProtocol, port)
+		if err != nil {
+			return nil, err
+		}
+		description, defaultDescription := resolveDescription(labels, apptypes.LabelDescription, cctx.image())
 
 		primary := &apptypes.ContainerService{
 			ContainerID:        cctx.containerID[:12],
 			ContainerName:      cctx.containerName,
 			ServiceEnabled:     true,
 			ServiceName:        serviceName,
-			ServiceDescription: resolveDescription(labels, apptypes.LabelDescription, cctx.image()),
+			ServiceDescription: description,
+			DefaultDescription: defaultDescription,
 			Port:               port,
 			TargetPort:         destPort,
 			ServiceProtocol:    serviceProtocol,
 			ServicePath:        servicePath,
 			Protocol:           protocol,
 			ProxyProtocol:      proxyProtocol,
+			HTTPRedirect:       httpRedirect,
 			Tags:               cctx.tags,
 			IPAddress:          destIP,
 			MonitorIP:          monIP,
@@ -1055,6 +1099,17 @@ func (c *Client) parseIndexedPorts(
 				Msg("Invalid path for indexed service, skipping")
 			continue
 		}
+		idxHTTPRedirect, err := parseHTTPRedirect(labels[prefix+"http-redirect"], serviceProtocol, servicePort)
+		if err != nil {
+			log.Warn().
+				Err(err).
+				Str("container", cctx.containerName).
+				Str("service", idxServiceName).
+				Int("index", idx).
+				Msg("Invalid http-redirect for indexed service, skipping")
+			continue
+		}
+		idxDescription, idxDefaultDescription := resolveDescription(labels, prefix+"description", cctx.image())
 
 		// Check for duplicate service name + port combo
 		dedupKey := idxServiceName + ":" + servicePort
@@ -1096,13 +1151,15 @@ func (c *Client) parseIndexedPorts(
 			ContainerName:      cctx.containerName,
 			ServiceEnabled:     true,
 			ServiceName:        idxServiceName,
-			ServiceDescription: resolveDescription(labels, prefix+"description", cctx.image()),
+			ServiceDescription: idxDescription,
+			DefaultDescription: idxDefaultDescription,
 			Port:               servicePort,
 			TargetPort:         idxDestPort,
 			ServiceProtocol:    serviceProtocol,
 			ServicePath:        idxServicePath,
 			Protocol:           protocol,
 			ProxyProtocol:      idxProxyProtocol,
+			HTTPRedirect:       idxHTTPRedirect,
 			Tags:               cctx.tags,
 			IPAddress:          idxDestIP,
 			MonitorIP:          monIP,

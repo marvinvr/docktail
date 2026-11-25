@@ -202,6 +202,12 @@ func normalizeServicePath(path string) string {
 // desired container labels. Path is compared only for HTTP(S), where an empty
 // desired value represents the default root handler.
 func serviceConfigChanged(current ServiceEndpoint, desired *apptypes.ContainerService) bool {
+	if desired.RedirectTo != "" {
+		return redirectConfigChanged(current, desired)
+	}
+	if current.Redirect != "" {
+		return true // a redirect is to be replaced by a proxied endpoint
+	}
 	expectedDest := buildDestination(desired)
 	return !sameDestination(current.Destination, expectedDest) ||
 		current.Protocol != desired.ServiceProtocol ||

@@ -1,5 +1,5 @@
 <!--
-description: Every DockTail Docker label: service name, ports, protocols, paths, PROXY protocol, multiple services per container, Funnel and Cloud labels.
+description: Every DockTail Docker label: service name, ports, protocols, paths, PROXY protocol, HTTP-to-HTTPS redirects, multiple services per container, Funnel and Cloud labels.
 title: DockTail Docker Labels: Tailscale Services and Funnel
 -->
 
@@ -30,7 +30,7 @@ Set `docktail.service.direct=false` to use published host ports instead. Use thi
 | `docktail.service.enable` | Yes | - | Enable a private Tailscale service for the container. |
 | `docktail.service.name` | Yes | - | Service name, such as `web` or `api`. |
 | `docktail.service.port` | Yes | - | Backend container port to proxy to. |
-| `docktail.service.description` | No | Image `title:version` or `title`, else image tag | Human-readable description shown for the service in the Tailscale admin panel. Requires API credentials (synced to the Service definition's `comment`). If unset, DockTail uses the image's `org.opencontainers.image.title` and `org.opencontainers.image.version` labels, else the image reference (for example `nginx:1.27`). Set it empty to leave the comment alone. |
+| `docktail.service.description` | No | Image `title:version` or `title`, else image tag | Human-readable description shown for the service in the Tailscale admin panel. Requires API credentials (synced to the Service definition's `comment`). When set, it overwrites the comment on every reconcile. If unset, DockTail falls back to the image's `org.opencontainers.image.title` and `org.opencontainers.image.version` labels, else the image reference (for example `nginx:1.27`), but only to fill an empty comment or to update one that names another version of the same image (`nginx:1.27` → `nginx:1.31`); a comment you wrote in the admin panel is kept. Set it empty to turn the fallback off and always leave the comment alone. |
 | `docktail.service.direct` | No | `true` | Proxy directly to container IP instead of requiring a published host port. Set `false` when host `tailscaled` cannot reach container IPs (rootless Docker). |
 | `docktail.service.network` | No | `bridge` or first available | Docker network used for direct container IP detection. |
 | `docktail.service.protocol` | No | Smart | Backend protocol. |
@@ -38,6 +38,7 @@ Set `docktail.service.direct=false` to use published host ports instead. Use thi
 | `docktail.service.service-protocol` | No | Smart | Tailscale-facing protocol. |
 | `docktail.service.path` | No | `/` | URL path for HTTP(S) Serve traffic. Must start with `/`; not valid for TCP services. |
 | `docktail.service.proxy-protocol` | No | off | PROXY protocol version (`1` or `2`) prepended on TCP forwards so the backend sees the tailnet client address. Only valid with `service-protocol` `tcp` or `tls-terminated-tcp`. |
+| `docktail.service.http-redirect` | No | `true` for `service-protocol` `https`, else `false` | Answer `http://` on port 80 of the service with a redirect to its HTTPS endpoint. Set `false` to turn it off; see [HTTP To HTTPS Redirect](#http-to-https-redirect). |
 | `docktail.tags` | No | `tag:container` | Comma-separated service tags. Labels are the source of truth; see the note below. |
 
 Tags are synced to the tailnet Service definition through the Tailscale API and require API credentials. Labels are authoritative: DockTail reconciles tags on every cycle, so tags edited by hand in the Tailscale admin console are reverted to the label-declared set on the next reconcile. Containers without a `docktail.tags` label use `DEFAULT_SERVICE_TAGS`.
@@ -60,6 +61,31 @@ labels:
   - "docktail.service.path=/api"
 ```
 
+### HTTP To HTTPS Redirect
+
+Every HTTPS service also answers plain `http://` on port 80 with a redirect to its HTTPS address, so a browser sent to `http://myapp` does not hang. Nothing needs to be configured:
+
+```yaml
+labels:
+  - "docktail.service.enable=true"
+  - "docktail.service.name=myapp"
+  - "docktail.service.port=3000"
+  - "docktail.service.service-port=443"
+```
+
+`http://myapp/settings?tab=2`, `http://myapp.your-tailnet.ts.net/settings?tab=2` and the service's tailnet IP all redirect with `308 Permanent Redirect` to `https://myapp.your-tailnet.ts.net/settings?tab=2`. The path and query are kept. The target always uses the full MagicDNS name, because the certificate only covers that name (a short name like `https://myapp/` would fail the TLS check). A `service-port` other than `443` stays in the target, for example `https://myapp.your-tailnet.ts.net:8443/`.
+
+To turn it off, set `docktail.service.http-redirect=false` (or `docktail.service.N.http-redirect=false` for an indexed service). Turning it off removes only the port 80 listener; HTTPS keeps serving.
+
+How it behaves:
+
+- **Port 80 already in use.** If any container declares port `80` for the same service name, that endpoint is kept and the redirect is skipped, with one info log. This never causes a [conflict](#service-name-conflicts-between-containers). When several HTTPS ports or containers share a service name, they share one redirect. It points to port `443` if one of them uses it, otherwise to the lowest port.
+- **Service definition.** The Service definition must allow `tcp:80`. With [API credentials](03-tailscale-admin.md#oauth-credentials), DockTail adds `tcp:80` to new definitions and to existing ones that lack it. It never removes ports. Without credentials, DockTail logs one warning per service: add `tcp:80` to the Service's ports in the [Tailscale admin console](https://login.tailscale.com/admin/services), or plain HTTP gets no answer.
+- **Requirements.** The host's `tailscaled` must be 1.92 or newer (the first release that can serve redirects), and MagicDNS must be on. Otherwise DockTail logs one warning and HTTPS works as before, without the redirect.
+- **Invalid labels.** `http-redirect=true` is rejected on a service that is not `https`, or that uses `service-port` `80`.
+
+The Tailscale CLI cannot configure redirects yet, so DockTail writes this one listener straight to `tailscaled`'s Serve configuration over the mounted Tailscale socket. This needs no permissions beyond what DockTail already uses.
+
 ### Multiple Services From One Container
 
 A single container can expose multiple separate Tailscale services using numbered labels:
@@ -76,7 +102,7 @@ services:
       - "docktail.service.1.port=8001"
 ```
 
-Each indexed service requires its own `name` and `port`. Per-index overridable labels are `name`, `port`, `service-port`, `protocol`, `service-protocol`, `path`, `proxy-protocol`, and `description`; an indexed service without its own `description` gets the same image default, not the primary's description. Tags and network settings are inherited from the primary service config.
+Each indexed service requires its own `name` and `port`. Per-index overridable labels are `name`, `port`, `service-port`, `protocol`, `service-protocol`, `path`, `proxy-protocol`, `http-redirect`, and `description`; an indexed service without its own `description` gets the same image default, not the primary's description. Tags and network settings are inherited from the primary service config.
 
 ### Service Name Conflicts Between Containers
 

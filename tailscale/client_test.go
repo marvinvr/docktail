@@ -140,6 +140,7 @@ func TestSyncServiceDefinitionReconciliation(t *testing.T) {
 		tags        []string
 		ports       []string
 		description string
+		fallback    string // image-derived default description
 		wantPut     bool
 		want        servicePutPayload
 	}{
@@ -237,6 +238,62 @@ func TestSyncServiceDefinitionReconciliation(t *testing.T) {
 			wantPut:     false,
 		},
 		{
+			name: "image default never replaces a manual comment",
+			existing: &apiService{
+				Name:    "svc:web",
+				Tags:    []string{"tag:web"},
+				Comment: "manual note",
+			},
+			tags:     []string{"tag:web"},
+			fallback: "nginx:1.31-alpine",
+			wantPut:  false,
+		},
+		{
+			name: "image default fills an empty comment",
+			existing: &apiService{
+				Name: "svc:web",
+				Tags: []string{"tag:web"},
+			},
+			tags:     []string{"tag:web"},
+			fallback: "nginx:1.31-alpine",
+			wantPut:  true,
+			want: servicePutPayload{
+				Name:    "svc:web",
+				Tags:    []string{"tag:web"},
+				Comment: "nginx:1.31-alpine",
+			},
+		},
+		{
+			name: "image default follows an image upgrade",
+			existing: &apiService{
+				Name:    "svc:web",
+				Tags:    []string{"tag:web"},
+				Comment: "registry:5000/app:1.0",
+			},
+			tags:     []string{"tag:web"},
+			fallback: "registry:5000/app:1.1",
+			wantPut:  true,
+			want: servicePutPayload{
+				Name:    "svc:web",
+				Tags:    []string{"tag:web"},
+				Comment: "registry:5000/app:1.1",
+			},
+		},
+		{
+			name:     "missing service is created with the image default",
+			existing: nil,
+			tags:     []string{"tag:web"},
+			ports:    []string{"443"},
+			fallback: "nginx:1.31-alpine",
+			wantPut:  true,
+			want: servicePutPayload{
+				Name:    "svc:web",
+				Tags:    []string{"tag:web"},
+				Ports:   []string{"tcp:443"},
+				Comment: "nginx:1.31-alpine",
+			},
+		},
+		{
 			name:        "missing service is created with tcp-prefixed ports",
 			existing:    nil,
 			tags:        []string{"tag:web"},
@@ -283,7 +340,7 @@ func TestSyncServiceDefinitionReconciliation(t *testing.T) {
 				httpClient: srv.Client(),
 			}
 
-			if err := c.SyncServiceDefinition(context.Background(), "web", tt.tags, tt.ports, tt.description); err != nil {
+			if err := c.SyncServiceDefinition(context.Background(), "web", tt.tags, tt.ports, tt.description, tt.fallback); err != nil {
 				t.Fatalf("SyncServiceDefinition returned error: %v", err)
 			}
 

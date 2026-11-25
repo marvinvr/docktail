@@ -34,7 +34,7 @@ fail() { echo "  FAIL: $1"; failed=$((failed + 1)); errors="${errors}\n  - $1"; 
 cleanup() {
     log "Cleaning up"
     kill "$TIMEOUT_PID" 2>/dev/null || true
-    docker rm -f "$CONFLICT_CONTAINER" >/dev/null 2>&1 || true
+    docker rm -f "$CONFLICT_CONTAINER" e2e-redirect >/dev/null 2>&1 || true
     docker compose -f "$COMPOSE_FILE" down -v --remove-orphans 2>/dev/null || true
     sweep_e2e_services
     rm -rf "$E2E_SECRETS_DIR"
@@ -122,7 +122,7 @@ wait_for_service_state() {
 
     while [ "$elapsed" -lt "$timeout" ]; do
         refresh_serve_status
-        actual_port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
+        actual_port=$(first_served_port "$name")
         if [ "$actual_port" = "$expected_port" ]; then
             terminate_tls=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$actual_port\"].TerminateTLS // empty" 2>/dev/null || true)
             is_https=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$actual_port\"].HTTPS // false" 2>/dev/null || true)
@@ -160,7 +160,7 @@ wait_for_proxy_protocol() {
 
     while [ "$elapsed" -lt "$timeout" ]; do
         refresh_serve_status
-        port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
+        port=$(first_served_port "$name")
         if [ -n "$port" ]; then
             actual=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP[\"$port\"].ProxyProtocol // 0" 2>/dev/null || echo "0")
             if [ "$actual" = "$expected" ]; then
@@ -173,6 +173,21 @@ wait_for_proxy_protocol() {
 
     fail "$name did not converge to PROXY protocol $expected within ${timeout}s"
     return 1
+}
+
+# Ports a service serves itself, sorted, as a JSON array. A port-80 HTTP
+# redirect (docktail.service.http-redirect, on by default for https) is left
+# out, so "the port" of an HTTPS service is still its HTTPS port.
+served_ports() {
+    echo "$SERVE_STATUS_CACHE" | jq -c --arg n "$1" '
+        (.Services[$n] // {}) as $s
+        | [($s.TCP // {}) | keys[] | . as $p
+           | select(([($s.Web // {}) | to_entries[] | select(.key | endswith(":" + $p))
+                      | .value.Handlers[]?.Redirect // empty] | length) == 0)]' 2>/dev/null || echo "[]"
+}
+
+first_served_port() {
+    served_ports "$1" | jq -r '.[0] // empty' 2>/dev/null || true
 }
 
 # Check if a service exists in the serve status
@@ -199,7 +214,7 @@ assert_service_port() {
     local name="svc:$1"
     local expected_port="$2"
     local actual
-    actual=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
+    actual=$(first_served_port "$name")
     if [ "$actual" = "$expected_port" ]; then
         pass "$name has port $expected_port"
     else
@@ -224,12 +239,12 @@ assert_service_has_port() {
     fi
 }
 
-# Check the total number of TCP ports on a service
+# Check the number of TCP ports a service serves (a port-80 redirect excluded)
 assert_service_port_count() {
     local name="svc:$1"
     local expected_count="$2"
     local actual_count
-    actual_count=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys | length" 2>/dev/null || echo "0")
+    actual_count=$(served_ports "$name" | jq -r 'length' 2>/dev/null || echo "0")
     if [ "$actual_count" = "$expected_count" ]; then
         pass "$name has $expected_count port(s)"
     else
@@ -244,7 +259,7 @@ assert_service_protocol() {
     local name="svc:$1"
     local expected_proto="$2"
     local port
-    port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
+    port=$(first_served_port "$name")
     if [ -z "$port" ]; then
         fail "$name protocol check: no TCP config found"
         return
@@ -277,7 +292,7 @@ assert_service_proxy_protocol() {
     local name="svc:$1"
     local expected="$2"
     local port
-    port=$(echo "$SERVE_STATUS_CACHE" | jq -r ".Services[\"$name\"].TCP | keys[0] // empty" 2>/dev/null || true)
+    port=$(first_served_port "$name")
     if [ -z "$port" ]; then
         fail "$name proxy-protocol check: no TCP config found"
         return
@@ -1133,8 +1148,8 @@ fi
 # Simulate a manual console edit by rewriting svc:e2e-custom-tags with a stale
 # tag set plus a manual comment, then assert DockTail converges the tags back
 # to the label-declared set. The container declares no description label, so
-# the manual comment must survive the tag update (an empty declared value
-# means DockTail leaves the existing one alone).
+# the manual comment must survive the tag update: the image-derived default
+# (nginx:1.31-alpine) only fills an empty comment, never a hand-written one.
 
 log "15. Authoritative Tag Reconciliation (issue #63)"
 
@@ -1318,10 +1333,204 @@ assert_service_destination_is "e2e-proto-http" "$owner_destination"
 assert_service_path         "e2e-proto-http" "/api"
 
 # ==============================================================================
-# 18. Log Health
+# 18. HTTP-to-HTTPS Redirect (on by default for service-protocol https)
+# ==============================================================================
+#
+# Every HTTPS service gets a plain-HTTP listener on port 80 that answers 308
+# to its HTTPS URL, unless docktail.service.http-redirect=false or port 80 of
+# the service is already taken. DockTail adds tcp:80 to the Service
+# definition itself. The live request goes to the Service VIP from this host,
+# so the CI node is approved as a host of svc:e2e-redirect first.
+
+log "18. HTTP-to-HTTPS Redirect"
+
+REDIRECT_CONTAINER="e2e-redirect"
+MAGICDNS_SUFFIX=$(docker exec "$TS_CONTAINER" tailscale status --json 2>/dev/null \
+    | jq -r '(.CurrentTailnet.MagicDNSSuffix // .MagicDNSSuffix // "") | rtrimstr(".")' 2>/dev/null || true)
+REDIRECT_FQDN="e2e-redirect.${MAGICDNS_SUFFIX}"
+
+# Redirect target of a service's port-80 handler, empty if it has none.
+redirect_target() {
+    echo "$SERVE_STATUS_CACHE" | jq -r --arg n "svc:$1" \
+        '[(.Services[$n].Web // {}) | to_entries[] | select(.key | endswith(":80"))
+          | .value.Handlers[]?.Redirect // empty] | first // empty' 2>/dev/null || true
+}
+
+# Poll until svc:$1's port-80 redirect target equals $2 ("" = no redirect).
+wait_for_redirect() {
+    local name="$1" expected="$2" timeout="${3:-$((RECONCILE_WAIT * 3))}" elapsed=0 actual=""
+    while [ "$elapsed" -lt "$timeout" ]; do
+        refresh_serve_status
+        actual=$(redirect_target "$name")
+        if [ "$actual" = "$expected" ]; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    fail "svc:$name redirect did not become '${expected:-<none>}' within ${timeout}s (got '${actual:-<none>}')"
+    return 1
+}
+
+api_service_ports() {
+    local token="$1" name="$2"
+    curl -s -H "Authorization: Bearer ${token}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/${name}" 2>/dev/null \
+        | jq -c '.ports // []' 2>/dev/null || echo "[]"
+}
+
+# Poll until the Service definition allows tcp:80.
+wait_for_definition_port80() {
+    local token="$1" name="$2" timeout="${3:-$((RECONCILE_WAIT * 4))}" elapsed=0 ports="[]"
+    while [ "$elapsed" -lt "$timeout" ]; do
+        ports=$(api_service_ports "$token" "$name")
+        if echo "$ports" | jq -e 'index("tcp:80") != null' >/dev/null 2>&1; then
+            pass "$name definition allows tcp:80 ($ports)"
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    fail "$name definition does not allow tcp:80 after ${timeout}s (ports $ports)"
+    return 1
+}
+
+if [ -z "$MAGICDNS_SUFFIX" ]; then
+    fail "tailnet reports no MagicDNS suffix; HTTP redirects need MagicDNS"
+fi
+
+echo "  --- HTTPS service gets the redirect by default ---"
+wait_for_redirect "e2e-redirect" "308:https://${REDIRECT_FQDN}\${REQUEST_URI}" && \
+    pass "svc:e2e-redirect redirects port 80 to https://${REDIRECT_FQDN}"
+assert_service_port         "e2e-redirect" "443"
+assert_service_protocol     "e2e-redirect" "https"
+if echo "$SERVE_STATUS_CACHE" | jq -e '.Services["svc:e2e-redirect"].TCP["80"].HTTP == true' >/dev/null 2>&1; then
+    pass "svc:e2e-redirect listens for plain HTTP on port 80"
+else
+    fail "svc:e2e-redirect has no plain-HTTP port 80"
+fi
+
+echo "  --- Opt-out keeps HTTPS only ---"
+refresh_serve_status
+assert_service_exists       "e2e-redirect-optout"
+assert_service_port_count   "e2e-redirect-optout" "1"
+if echo "$SERVE_STATUS_CACHE" | jq -e '.Services["svc:e2e-redirect-optout"].TCP["80"]' >/dev/null 2>&1; then
+    fail "svc:e2e-redirect-optout serves port 80 despite http-redirect=false"
+else
+    pass "svc:e2e-redirect-optout has no port 80"
+fi
+
+echo "  --- A port 80 declared by another container wins, without a conflict ---"
+assert_service_has_port     "e2e-redirect-taken" "443"
+assert_service_has_port     "e2e-redirect-taken" "80"
+if [ -z "$(redirect_target "e2e-redirect-taken")" ] && \
+   echo "$SERVE_STATUS_CACHE" | jq -e '[.Services["svc:e2e-redirect-taken"].Web[] | .Handlers[]?.Proxy // empty] | length == 2' >/dev/null 2>&1; then
+    pass "svc:e2e-redirect-taken port 80 proxies to its own container"
+else
+    fail "svc:e2e-redirect-taken port 80 is not the declared HTTP endpoint"
+fi
+wait_for_docktail_log "HTTP redirect skipped"
+if docker logs "$DOCKTAIL_CONTAINER" 2>&1 | grep "Service endpoint conflict" | grep -q "e2e-redirect"; then
+    fail "a redirect caused a service endpoint conflict"
+else
+    pass "no endpoint conflict for redirect services"
+fi
+
+REDIRECT_TOKEN=$(mint_api_token)
+if [ -z "$REDIRECT_TOKEN" ]; then
+    fail "no OAuth credentials available to verify the redirect's Service definition and live traffic"
+else
+    echo "  --- DockTail adds tcp:80 to the Service definition ---"
+    wait_for_definition_port80 "$REDIRECT_TOKEN" "svc:e2e-redirect"
+
+    echo "  --- ... also to a definition that existed without it ---"
+    current_def=$(curl -s -H "Authorization: Bearer ${REDIRECT_TOKEN}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/svc:e2e-redirect" 2>/dev/null)
+    stripped_def=$(echo "$current_def" | jq -c '.ports = [.ports[] | select(. != "tcp:80")]' 2>/dev/null || true)
+    strip_status=$(curl -s -o /dev/null -w "%{http_code}" -X PUT \
+        -H "Authorization: Bearer ${REDIRECT_TOKEN}" -H "Content-Type: application/json" \
+        -d "$stripped_def" "${API_BASE}/tailnet/${API_TAILNET}/services/svc:e2e-redirect" 2>/dev/null || echo "000")
+    if [ "$strip_status" = "200" ]; then
+        pass "removed tcp:80 from svc:e2e-redirect via API ($(api_service_ports "$REDIRECT_TOKEN" "svc:e2e-redirect"))"
+    else
+        fail "failed to remove tcp:80 from svc:e2e-redirect via API (status $strip_status)"
+    fi
+    wait_for_definition_port80 "$REDIRECT_TOKEN" "svc:e2e-redirect"
+    wait_for_docktail_log "Adding the HTTP redirect port to the Service definition"
+
+    echo "  --- A real http:// request gets 308 to HTTPS, path and query kept ---"
+    self_node=$(docker exec "$TS_CONTAINER" tailscale status --json 2>/dev/null | jq -r '.Self.ID // empty' 2>/dev/null || true)
+    approval=$(curl -s -X POST -H "Authorization: Bearer ${REDIRECT_TOKEN}" -H "Content-Type: application/json" \
+        -d '{"approved":true}' \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/svc:e2e-redirect/device/${self_node}/approved" 2>/dev/null || true)
+    if echo "$approval" | jq -e '.approved == true' >/dev/null 2>&1; then
+        pass "CI node approved as a host of svc:e2e-redirect"
+    else
+        fail "could not approve the CI node for svc:e2e-redirect (node '${self_node}'): ${approval}"
+    fi
+    vip=$(curl -s -H "Authorization: Bearer ${REDIRECT_TOKEN}" \
+        "${API_BASE}/tailnet/${API_TAILNET}/services/svc:e2e-redirect" 2>/dev/null \
+        | jq -r '[.addrs[]? | select(test("^[0-9.]+$"))] | first // empty' 2>/dev/null || true)
+    want="308 https://${REDIRECT_FQDN}/e2e/some/path?x=1&y=two"
+    got=""
+    if [ -n "$vip" ]; then
+        elapsed=0
+        while [ "$elapsed" -lt 90 ]; do
+            got=$(curl -s -o /dev/null --max-time 5 -H "Host: ${REDIRECT_FQDN}" \
+                -w '%{http_code} %header{location}' "http://${vip}/e2e/some/path?x=1&y=two" 2>/dev/null || true)
+            [ "$got" = "$want" ] && break
+            sleep 2
+            elapsed=$((elapsed + 2))
+        done
+    fi
+    if [ "$got" = "$want" ]; then
+        pass "http://${REDIRECT_FQDN}/e2e/some/path?x=1&y=two -> $got"
+    else
+        fail "http:// request to svc:e2e-redirect (VIP '${vip:-<none>}') got '${got:-<no response>}', want '$want'"
+    fi
+fi
+
+echo "  --- Opting out on a running service removes port 80 and keeps HTTPS ---"
+docker rm -f "$REDIRECT_CONTAINER" >/dev/null 2>&1 || true
+docker run -d \
+    --name "$REDIRECT_CONTAINER" \
+    --restart no \
+    --label "docktail.service.enable=true" \
+    --label "docktail.service.name=e2e-redirect" \
+    --label "docktail.service.port=80" \
+    --label "docktail.service.protocol=http" \
+    --label "docktail.service.service-port=443" \
+    --label "docktail.service.service-protocol=https" \
+    --label "docktail.service.http-redirect=false" \
+    nginx:alpine >/dev/null 2>&1
+wait_for_redirect "e2e-redirect" "" && pass "svc:e2e-redirect redirect removed after opting out"
+refresh_serve_status
+if echo "$SERVE_STATUS_CACHE" | jq -e '.Services["svc:e2e-redirect"].TCP["80"]' >/dev/null 2>&1; then
+    fail "svc:e2e-redirect still serves port 80 after opting out"
+else
+    pass "svc:e2e-redirect no longer serves port 80"
+fi
+wait_for_service_state "e2e-redirect" "443" "https" "$((RECONCILE_WAIT * 3))" && \
+    pass "svc:e2e-redirect keeps serving HTTPS on 443"
+
+echo "  --- Removing the container cleans up the whole service ---"
+docker rm -f "$REDIRECT_CONTAINER" >/dev/null 2>&1 || true
+elapsed=0
+while [ "$elapsed" -lt "$((RECONCILE_WAIT * 3))" ]; do
+    refresh_serve_status
+    if ! echo "$SERVE_STATUS_CACHE" | jq -e '.Services["svc:e2e-redirect"]' >/dev/null 2>&1; then
+        break
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+done
+assert_service_not_exists   "e2e-redirect"
+
+# ==============================================================================
+# 19. Log Health
 # ==============================================================================
 
-log "18. DockTail Log Health"
+log "19. DockTail Log Health"
 docktail_logs=$(docker logs "$DOCKTAIL_CONTAINER" 2>&1)
 
 if grep -qE "FATAL|panic" <<<"$docktail_logs"; then
